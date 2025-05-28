@@ -1,0 +1,46 @@
+# Database Configuration
+source_db:
+  type: postgresql  # or mysql
+  host: 192.168.64.1  # Docker service name
+  port: 5432
+  user: admin
+  password: root
+  database: check_db_source
+
+target_db:
+  type: postgresql  # or mysql
+  host: 192.168.64.1  # Docker service name
+  port: 5432
+  user: admin
+  password: root
+  database: check_db_target
+
+# Validation Settings
+validation:
+  interval_minutes: 5
+  types:
+    - row_count
+    - hash_check
+    - sample_comparison
+  sample_size: 1000
+  chunk_size: 10000
+
+# Table Settings
+tables:
+  include: []  # Empty list means all tables
+  exclude: []
+  name_mapping: {}  # Source to target table name mapping
+
+# Server Settings
+server:
+  host: 0.0.0.0
+  port: 8000
+  health_check_path: /health
+
+# Logging Settings
+logging:
+  level: INFO
+  file: logs/data_checker.log
+  max_size: 10485760  # 10MB
+  backup_count: 5
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}" 

@@ -1,0 +1,11 @@
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+mysqlclient>=2.1.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+python-jose[cryptography]>=3.3.0
+schedule>=1.2.0
+loguru>=0.7.0 
