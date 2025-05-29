@@ -1,10 +1,8 @@
 from sqlalchemy import text, MetaData, Table
 from typing import Dict, Any, List, Tuple
 import random
-import logging
+from loguru import logger
 from validators.base import BaseValidator
-
-logger = logging.getLogger(__name__)
 
 class SampleValidator(BaseValidator):
     def __init__(self, source_engine, target_engine, config):

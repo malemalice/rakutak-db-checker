@@ -59,6 +59,7 @@ This project aims to automate data validation between source and target database
 - Compare hashes between source and target for matching primary keys.
 - Allow chunking for large tables.
 - **Schema validation**: Detect column differences while allowing ignored columns to exist only in target.
+- **Detailed mismatch logging**: Log complete source and target row data when hash mismatches occur.
 
 ### 3.6 Sample Data Comparison
 
@@ -73,8 +74,17 @@ This project aims to automate data validation between source and target database
 - Include total tables compared, pass/fail stats, mismatched rows, etc.
 - **ETL-aware reporting**: Show which columns are being ignored per table.
 - Log all validation processes and results with timestamps.
+- **Detailed mismatch logs**: For hash validation failures, log complete row data to help identify specific differences.
 
-### 3.8 ETL Integration Features
+### 3.8 Detailed Debugging Features
+
+- **Row-by-row comparison**: When hash mismatches occur, log complete source and target row data
+- **Difference identification**: Highlight specific columns that differ between source and target
+- **Data type visibility**: Use `repr()` to show exact data types and precision differences
+- **Primary key tracking**: Include primary key values for easy manual verification
+- **Structured logging**: All components use `loguru` for consistent log formatting
+
+### 3.9 ETL Integration Features
 
 - **Configurable ignored columns**: Global list of columns to ignore during hash validation
 - **DLT compatibility**: Default ignore list includes `_dlt_load_id`, `_dlt_id`, `_extracted_at`, `_loaded_at`
@@ -93,6 +103,8 @@ This project aims to automate data validation between source and target database
   - Descriptive docstrings and filenames.
 - Comprehensive logging system:
   - Clean console output for user experience
+  - Detailed file logging with `loguru` for debugging
+  - Row-by-row mismatch analysis for hash validation
   - Structured logging for machine processing.
   - Human-readable logs for debugging.
   - Log rotation and retention policies.
@@ -218,6 +230,10 @@ Total tables validated: 5
 
 ❌ FAILED TABLES:
    • orders (3 hash mismatches, ignored: ['_dlt_load_id', 'created_at'])
+
+📋 DETAILED LOGS:
+   For row-by-row data comparison of mismatched records,
+   check the detailed logs at: logs/data_checker.log
 ============================================================
 ```
 
@@ -226,6 +242,22 @@ Total tables validated: 5
 2025-05-29 10:30:00 | INFO | Hash validation will ignore these columns: ['_dlt_load_id', '_dlt_id', '_extracted_at', '_loaded_at']
 2025-05-29 10:30:01 | INFO | Ignored columns for orders: ['_dlt_load_id', 'created_at']
 2025-05-29 10:30:01 | INFO | Generating hashes for table orders using columns: ['order_id', 'user_id', 'amount', 'status']
+2025-05-29 10:30:02 | INFO | === HASH MISMATCH #1 IN TABLE 'orders' ===
+2025-05-29 10:30:02 | INFO | Primary key: {'order_id': '123'}
+2025-05-29 10:30:02 | INFO | SOURCE ROW DATA:
+2025-05-29 10:30:02 | INFO |   order_id: '123'
+2025-05-29 10:30:02 | INFO |   user_id: '456'
+2025-05-29 10:30:02 | INFO |   amount: Decimal('150.00')
+2025-05-29 10:30:02 | INFO |   status: 'completed'
+2025-05-29 10:30:02 | INFO | TARGET ROW DATA:
+2025-05-29 10:30:02 | INFO |   order_id: '123'
+2025-05-29 10:30:02 | INFO |   user_id: '456'
+2025-05-29 10:30:02 | INFO |   amount: Decimal('150.0')
+2025-05-29 10:30:02 | INFO |   status: 'completed'
+2025-05-29 10:30:02 | INFO | DIFFERENCES FOUND:
+2025-05-29 10:30:02 | INFO |   - amount: 'Decimal('150.00')' != 'Decimal('150.0')'
+2025-05-29 10:30:02 | INFO | ============================================================
+2025-05-29 10:30:02 | INFO | 📋 For detailed row-by-row comparison of mismatched data, check: logs/data_checker.log
 ```
 
 ---

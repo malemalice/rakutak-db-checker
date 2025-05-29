@@ -2,10 +2,8 @@ from sqlalchemy import text, MetaData, Table, select
 from typing import Dict, Any, List, Tuple
 import hashlib
 import json
-import logging
+from loguru import logger
 from validators.base import BaseValidator
-
-logger = logging.getLogger(__name__)
 
 class HashValidator(BaseValidator):
     def __init__(self, source_engine, target_engine, config):
@@ -109,6 +107,89 @@ class HashValidator(BaseValidator):
             
         return hashes
 
+    def _get_row_data_for_logging(self, table_name: str, engine, pk_columns: List[str], final_columns: List[str], pk_values: Tuple) -> Dict[str, Any]:
+        """
+        Get detailed row data for logging purposes.
+        
+        Args:
+            table_name (str): Name of the table
+            engine: SQLAlchemy engine
+            pk_columns (List[str]): Primary key column names
+            final_columns (List[str]): Columns to include
+            pk_values (Tuple): Primary key values to fetch
+            
+        Returns:
+            Dict[str, Any]: Row data as dictionary
+        """
+        try:
+            # Build WHERE clause for primary key
+            if len(pk_columns) == 1:
+                where_clause = f"{pk_columns[0]} = '{pk_values[0]}'"
+            else:
+                conditions = []
+                for i, col in enumerate(pk_columns):
+                    conditions.append(f"{col} = '{pk_values[i]}'")
+                where_clause = " AND ".join(conditions)
+            
+            query = text(f"SELECT {', '.join(final_columns)} FROM {table_name} WHERE {where_clause}")
+            
+            with engine.connect() as conn:
+                row = conn.execute(query).fetchone()
+                if row:
+                    return {col: row[i] for i, col in enumerate(final_columns)}
+                return {}
+        except Exception as e:
+            logger.error(f"Error fetching row data for logging: {str(e)}")
+            return {}
+
+    def _log_detailed_mismatch(self, table_name: str, pk_values: Tuple, source_pk: List[str], final_columns: List[str], mismatch_count: int):
+        """
+        Log detailed information about hash mismatches.
+        
+        Args:
+            table_name (str): Name of the table
+            pk_values (Tuple): Primary key values of mismatched row
+            source_pk (List[str]): Primary key column names
+            final_columns (List[str]): Columns used for hashing
+            mismatch_count (int): Current mismatch count for progress
+        """
+        logger.info(f"=== HASH MISMATCH #{mismatch_count} IN TABLE '{table_name}' ===")
+        logger.info(f"Primary key: {dict(zip(source_pk, pk_values))}")
+        
+        # Get detailed row data from both databases
+        source_row = self._get_row_data_for_logging(table_name, self.source_engine, source_pk, final_columns, pk_values)
+        target_row = self._get_row_data_for_logging(table_name, self.target_engine, source_pk, final_columns, pk_values)
+        
+        if source_row and target_row:
+            logger.info("SOURCE ROW DATA:")
+            for col in final_columns:
+                source_val = source_row.get(col, 'NULL')
+                logger.info(f"  {col}: {repr(source_val)}")
+            
+            logger.info("TARGET ROW DATA:")
+            for col in final_columns:
+                target_val = target_row.get(col, 'NULL')
+                logger.info(f"  {col}: {repr(target_val)}")
+            
+            # Show differences
+            differences = []
+            for col in final_columns:
+                source_val = source_row.get(col)
+                target_val = target_row.get(col)
+                if source_val != target_val:
+                    differences.append(f"{col}: '{source_val}' != '{target_val}'")
+            
+            if differences:
+                logger.info("DIFFERENCES FOUND:")
+                for diff in differences:
+                    logger.info(f"  - {diff}")
+            else:
+                logger.warning("No obvious differences found (possible data type or encoding issue)")
+        else:
+            logger.error("Could not retrieve row data for detailed comparison")
+        
+        logger.info("=" * 60)
+
     def validate_table(self, table_name: str) -> Dict[str, Any]:
         """
         Validate table data using hash comparison, ignoring configured columns.
@@ -184,6 +265,8 @@ class HashValidator(BaseValidator):
             
             # Compare hashes
             mismatches = []
+            mismatch_count = 0
+            
             for pk, source_hash in source_hashes.items():
                 if pk not in target_hashes:
                     mismatches.append({
@@ -191,13 +274,17 @@ class HashValidator(BaseValidator):
                         "status": "missing_in_target",
                         "source_hash": source_hash
                     })
+                    logger.warning(f"Row missing in target - PK: {dict(zip(source_pk, pk))}")
                 elif target_hashes[pk] != source_hash:
+                    mismatch_count += 1
                     mismatches.append({
                         "primary_key": pk,
                         "status": "hash_mismatch",
                         "source_hash": source_hash,
                         "target_hash": target_hashes[pk]
                     })
+                    # Log detailed mismatch information
+                    self._log_detailed_mismatch(table_name, pk, source_pk, final_columns, mismatch_count)
             
             # Check for rows in target but not in source
             for pk in target_hashes:
@@ -207,6 +294,7 @@ class HashValidator(BaseValidator):
                         "status": "missing_in_source",
                         "target_hash": target_hashes[pk]
                     })
+                    logger.warning(f"Row missing in source - PK: {dict(zip(source_pk, pk))}")
             
             result = {
                 "status": "success" if not mismatches else "mismatch",
@@ -221,6 +309,9 @@ class HashValidator(BaseValidator):
                 logger.warning(
                     f"Hash validation found {len(mismatches)} mismatches in table {table_name}"
                 )
+                # Add instruction for detailed logs
+                if mismatch_count > 0:  # Only show instruction if there were hash mismatches (not just missing rows)
+                    logger.info(f"📋 For detailed row-by-row comparison of mismatched data, check: logs/data_checker.log")
             else:
                 logger.info(f"Hash validation successful for table {table_name}")
             

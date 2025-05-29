@@ -145,12 +145,18 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
     passed_tables = []
     failed_tables = []
     error_tables = []
+    has_hash_mismatches = False
     
     for table_name, result in validator_results.items():
         if result.get("status") == "success":
             passed_tables.append(table_name)
         elif result.get("status") == "mismatch":
             failed_tables.append(table_name)
+            # Check if this is a hash validator with actual mismatches (not just missing rows)
+            if validator_name == "HashValidator" and "mismatches" in result:
+                hash_mismatches = [m for m in result["mismatches"] if m.get("status") == "hash_mismatch"]
+                if hash_mismatches:
+                    has_hash_mismatches = True
         elif result.get("status") == "error":
             error_tables.append(table_name)
     
@@ -201,6 +207,12 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
         for table in sorted(error_tables):
             error_msg = validator_results[table].get("error", "Unknown error")
             print(f"   • {table}: {error_msg}")
+    
+    # Add detailed log instruction for hash validator with mismatches
+    if validator_name == "HashValidator" and has_hash_mismatches:
+        print(f"\n📋 DETAILED LOGS:")
+        print(f"   For row-by-row data comparison of mismatched records,")
+        print(f"   check the detailed logs at: logs/data_checker.log")
     
     print(f"{'='*60}")
     

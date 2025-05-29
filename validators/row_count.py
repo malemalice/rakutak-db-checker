@@ -1,9 +1,7 @@
 from sqlalchemy import text
 from typing import Dict, Any
-import logging
+from loguru import logger
 from validators.base import BaseValidator
-
-logger = logging.getLogger(__name__)
 
 class RowCountValidator(BaseValidator):
     def validate_table(self, table_name: str) -> Dict[str, Any]:

@@ -2,9 +2,7 @@ from abc import ABC, abstractmethod
 from sqlalchemy.engine import Engine
 from sqlalchemy import text
 from typing import Dict, Any, List
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 class BaseValidator(ABC):
     def __init__(self, source_engine: Engine, target_engine: Engine, config: Dict[str, Any]):

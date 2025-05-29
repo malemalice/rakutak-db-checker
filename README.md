@@ -184,9 +184,42 @@ Creates MD5 hashes of row data and compares them between databases:
 - Detects schema differences
 - Identifies data mismatches with specific row references
 - Handles chunking for large tables
+- **Detailed mismatch logging**: Logs complete source and target row data for mismatched records
 
 ### Sample Data Comparison
 Performs simple row count comparison (lightweight version of row count validation).
+
+## Detailed Logging
+
+When hash validation finds mismatches, detailed row-by-row comparison data is logged to `logs/data_checker.log`. This includes:
+
+- **Primary key values** of mismatched rows
+- **Complete source row data** with all column values
+- **Complete target row data** with all column values
+- **Specific differences** showing which columns differ and their values
+
+### Example Detailed Log Output
+```
+2025-05-29 10:30:15 | INFO | === HASH MISMATCH #1 IN TABLE 'orders' ===
+2025-05-29 10:30:15 | INFO | Primary key: {'order_id': '123'}
+2025-05-29 10:30:15 | INFO | SOURCE ROW DATA:
+2025-05-29 10:30:15 | INFO |   order_id: '123'
+2025-05-29 10:30:15 | INFO |   amount: Decimal('150.00')
+2025-05-29 10:30:15 | INFO |   status: 'completed'
+2025-05-29 10:30:15 | INFO | TARGET ROW DATA:
+2025-05-29 10:30:15 | INFO |   order_id: '123'
+2025-05-29 10:30:15 | INFO |   amount: Decimal('150.0')
+2025-05-29 10:30:15 | INFO |   status: 'completed'
+2025-05-29 10:30:15 | INFO | DIFFERENCES FOUND:
+2025-05-29 10:30:15 | INFO |   - amount: 'Decimal('150.00')' != 'Decimal('150.0')'
+2025-05-29 10:30:15 | INFO | ============================================================
+```
+
+This detailed logging helps identify:
+- **Data type differences** (Decimal precision, timestamp microseconds)
+- **Encoding issues** (character encoding differences)
+- **Null handling** (NULL vs empty string)
+- **Precision mismatches** (floating point precision)
 
 ## Sample Output
 
@@ -211,6 +244,10 @@ Total tables validated: 3
 
 ❌ FAILED TABLES:
    • orders (2 hash mismatches, ignored: ['_dlt_load_id', 'created_at'])
+
+📋 DETAILED LOGS:
+   For row-by-row data comparison of mismatched records,
+   check the detailed logs at: logs/data_checker.log
 ============================================================
 
 ============================================================
@@ -233,9 +270,14 @@ Total tables: 3
 ## Logging
 
 Logs are written to:
-- Console (stdout) with clean formatting for summaries
-- File (configured in settings.yaml) with timestamps
-- Rotated based on size and retention settings
+- **Console (stdout)**: Clean formatting for summaries with progress indicators
+- **File (logs/data_checker.log)**: Detailed logs with timestamps including:
+  - Process information and progress
+  - Row-by-row mismatch details for hash validation
+  - Complete source and target row data for debugging
+- **Log rotation**: Based on size and retention settings in configuration
+
+The application uses `loguru` for consistent, structured logging across all components.
 
 ## Development
 
@@ -244,10 +286,10 @@ The project structure follows a modular design:
 data_checker/
 ├── config/          # Configuration files
 ├── connectors/      # Database connectors
-├── validators/      # Validation methods
+├── validators/      # Validation methods (all using loguru)
 ├── reports/         # Report generation
 ├── utils/          # Utility functions
-└── logs/           # Log files
+└── logs/           # Log files with detailed mismatch data
 ```
 
 ## ETL/DLT Integration

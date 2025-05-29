@@ -50,6 +50,12 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 ### Schema Validation with Ignored Columns
 > Write a function that compares table schemas between source and target databases, but allows target to have additional columns that are in the ignored list.
 
+### Detailed Mismatch Logging
+> Write a function that logs complete source and target row data when hash mismatches occur. Include primary key values, all column data, and specific differences between the rows.
+
+### Row Data Fetcher for Debugging
+> Create a function that retrieves complete row data from a database given a table name and primary key values. This should be used for detailed logging of mismatched rows.
+
 ---
 
 ## 🎲 Sample Data Comparison
@@ -68,6 +74,9 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 
 ### ETL-Aware Summary
 > Create a summary function that shows which columns were ignored during hash validation and includes this information in the final report.
+
+### Detailed Log Instructions
+> Write a function that displays instructions to users about where to find detailed mismatch logs when hash validation failures occur.
 
 ---
 
@@ -94,6 +103,9 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 ### Hash Validation Tests
 > Write unit tests for hash validation with ignored columns. Test that ignored columns don't affect hash generation.
 
+### Detailed Logging Tests
+> Write unit tests that verify detailed mismatch logging functionality, ensuring that source and target row data is properly logged when hash mismatches occur.
+
 ---
 
 ## 📝 Logging
@@ -106,6 +118,15 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 
 ### ETL-Aware Logging
 > Create logging functions that specifically mention which columns are being ignored during validation and why.
+
+### Loguru Integration
+> Write a logging setup using loguru that ensures all validators and components use the same logging configuration for consistent output.
+
+### Detailed Mismatch Logger
+> Create a logging function that writes detailed row-by-row comparison data to the log file when hash mismatches occur. Include source data, target data, and differences.
+
+### Row Difference Analyzer
+> Write a function that compares two rows field by field and logs the specific differences, showing both the source and target values for each differing column.
 
 ---
 
@@ -158,6 +179,18 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 
 ### Hash Mismatch Analyzer
 > Create a function that takes hash mismatches and helps identify the specific data differences, ignoring configured columns.
+
+### Detailed Row Comparison
+> Write a function that fetches and compares specific rows from source and target databases, logging the complete data and highlighting differences.
+
+### Data Type Difference Detector
+> Create a function that identifies data type mismatches between source and target rows, such as decimal precision differences or timestamp variations.
+
+### Primary Key Tracker
+> Write a function that logs primary key information for mismatched rows to make manual verification easier.
+
+### Precision Mismatch Identifier
+> Create a function that specifically identifies precision differences in numeric fields (e.g., Decimal('150.00') vs Decimal('150.0')).
 
 ---
 
