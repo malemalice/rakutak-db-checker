@@ -1,3 +1,6 @@
+.DS_Store
 config/settings.yaml
 reports/
 venv
+scheduler/__pycache__
+logs/

@@ -77,8 +77,48 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 
 ---
 
+## 🏥 Health Check Server
+
+### FastAPI Health Endpoint
+> Create a FastAPI endpoint that returns the current service status, last execution details, and timestamp of the last check.
+
+### Health Status Monitor
+> Write a function that monitors the health status of the validation service and updates the status accordingly.
+
+---
+
+## ⏰ Scheduler
+
+### Interval-based Execution
+> Create a scheduler that runs validations at configured intervals using APScheduler or similar.
+
+### Job Management
+> Write functions to add, remove, and modify scheduled validation jobs.
+
+---
+
+## 📝 Logging
+
+### Structured Logger
+> Create a logging configuration that writes to both console and file with rotation.
+
+### Log Formatter
+> Write a custom log formatter that includes timestamp, level, and context information.
+
+---
+
+## 🐳 Docker Support
+
+### Dockerfile
+> Create a Dockerfile that sets up the Python environment and installs dependencies.
+
+### Docker Compose
+> Write a docker-compose.yml file that includes the validator service and any required dependencies.
+
+---
+
 ## 🧠 Meta: Prompt Guide Generator
 
-> Generate a Markdown prompt library for a Python-based data validation tool with sections like: connection, row check, hashing, reporting, CLI.
+> Generate a Markdown prompt library for a Python-based data validation tool with sections like: connection, row check, hashing, reporting, CLI, health checks, and scheduling.
 
 ---
