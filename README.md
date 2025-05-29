@@ -7,9 +7,10 @@ A Python-based tool for validating data between source and target databases duri
 - Automated validation of table structure and content
 - Multiple validation methods:
   - Row count comparison
-  - Hash-based validation
+  - Hash-based validation (with configurable column ignoring)
   - Sample data comparison
-- Comprehensive logging
+- ETL-friendly: Automatically ignores metadata columns added by tools like DLT
+- Comprehensive logging with clean summary reports
 - Support for PostgreSQL and MySQL databases
 
 ## Requirements
@@ -74,6 +75,7 @@ docker compose up -d
    - Database connections
    - Validation settings
    - Table mappings
+   - Ignored columns for hash validation
    - Logging configuration
 
 Example configuration:
@@ -94,6 +96,28 @@ target_db:
   password: target_password
   database: target_db
 
+validation:
+  types:
+    - row_count
+    - hash_check
+    - sample_comparison
+  sample_size: 1000
+  chunk_size: 10000
+  
+  # Columns to ignore during hash validation (ETL metadata)
+  ignored_columns:
+    - _dlt_load_id
+    - _dlt_id
+    - _extracted_at
+    - _loaded_at
+    - created_at
+    - updated_at
+
+tables:
+  include: []  # Empty means all tables
+  exclude: []  # Tables to skip
+  name_mapping: {}  # Source to target table name mapping
+
 logging:
   level: INFO
   file: logs/validator.log
@@ -101,6 +125,16 @@ logging:
   backup_count: 5
   format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 ```
+
+### Ignored Columns Feature
+
+The hash validator can ignore specific columns that are commonly added by ETL tools:
+
+- **DLT metadata**: `_dlt_load_id`, `_dlt_id`, `_extracted_at`, `_loaded_at`
+- **Audit columns**: `created_at`, `updated_at`, `modified_at`
+- **ETL timestamps**: `insert_timestamp`, `etl_timestamp`, `processed_at`
+
+This allows the target database to have additional metadata columns without causing validation failures.
 
 ## Usage
 
@@ -139,17 +173,68 @@ docker compose logs -f app
 docker compose down
 ```
 
-The application will:
-- Load the configuration from the mounted config directory
-- Connect to source and target databases
-- Run the configured validations
-- Log results to the mounted logs directory
+## Validation Methods
+
+### Row Count Validation
+Compares the number of rows in each table between source and target databases.
+
+### Hash-Based Validation
+Creates MD5 hashes of row data and compares them between databases:
+- Ignores configured metadata columns
+- Detects schema differences
+- Identifies data mismatches with specific row references
+- Handles chunking for large tables
+
+### Sample Data Comparison
+Performs simple row count comparison (lightweight version of row count validation).
+
+## Sample Output
+
+```
+🚀 Starting HashValidator for 3 tables
+[1/3] Validating table: users ... ✅ PASSED
+[2/3] Validating table: orders ... ❌ FAILED (2 hash mismatches)
+[3/3] Validating table: products ... ✅ PASSED
+✅ Completed HashValidator validation
+
+============================================================
+VALIDATION SUMMARY - HashValidator
+============================================================
+Total tables validated: 3
+✅ Passed: 2 tables
+❌ Failed: 1 tables
+⚠️  Errors: 0 tables
+
+✅ PASSED TABLES:
+   • products
+   • users
+
+❌ FAILED TABLES:
+   • orders (2 hash mismatches, ignored: ['_dlt_load_id', 'created_at'])
+============================================================
+
+============================================================
+OVERALL VALIDATION SUMMARY
+============================================================
+Total tables: 3
+✅ Fully matched: 2 tables (66.7%)
+❌ Mismatched: 1 tables (33.3%)
+⚠️  Errors: 0 tables (0.0%)
+
+✅ FULLY MATCHED TABLES:
+   • products
+   • users
+
+❌ TABLES WITH MISMATCHES:
+   • orders
+============================================================
+```
 
 ## Logging
 
 Logs are written to:
-- Console (stdout)
-- File (configured in settings.yaml)
+- Console (stdout) with clean formatting for summaries
+- File (configured in settings.yaml) with timestamps
 - Rotated based on size and retention settings
 
 ## Development
@@ -164,6 +249,15 @@ data_checker/
 ├── utils/          # Utility functions
 └── logs/           # Log files
 ```
+
+## ETL/DLT Integration
+
+This tool is specifically designed for DLT and other ETL scenarios:
+
+- **Handles metadata columns**: Automatically ignores ETL-added columns
+- **Schema flexibility**: Target can have additional columns without errors  
+- **Business data focus**: Validates actual data while ignoring technical metadata
+- **Configurable**: Easy to add/remove ignored columns per environment
 
 ## Contributing
 

@@ -41,11 +41,20 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 ### Hash Row-by-Row
 > Create a function that computes a hash for each row in a table using SQLAlchemy. Use the primary key as the matching field.
 
+### ETL-Friendly Hash Validation
+> Write a hash validation function that can ignore specific columns (like `_dlt_load_id`, `created_at`) during hash generation. Accept a list of ignored columns as parameter.
+
+### Column Filtering
+> Create a function that filters out specified columns from a table's column list before generating hashes. This is useful for ignoring ETL metadata columns.
+
+### Schema Validation with Ignored Columns
+> Write a function that compares table schemas between source and target databases, but allows target to have additional columns that are in the ignored list.
+
 ---
 
 ## 🎲 Sample Data Comparison
 
-> Write a Python function that randomly samples N rows from a table using SQLAlchemy and compares field values between two databases. Return any mismatched rows.
+> Write a Python function that compares row counts between two tables using SQLAlchemy. This should be a lightweight alternative to complex row-by-row comparison.
 
 ---
 
@@ -54,8 +63,21 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 ### JSON Report
 > Generate a function that takes a dictionary of validation results and writes it to a JSON file.
 
-### Markdown Report
-> Write a function that formats a dictionary of validation results into a Markdown table with summary at the top.
+### Clean Console Summary
+> Write a function that formats validation results into a clean console output with emojis, progress indicators, and summary statistics. Include information about ignored columns.
+
+### ETL-Aware Summary
+> Create a summary function that shows which columns were ignored during hash validation and includes this information in the final report.
+
+---
+
+## ⚙️ Configuration Management
+
+### Settings Loader with Ignored Columns
+> Write a function to load a `settings.yaml` file that includes an `ignored_columns` list under the validation section. Handle missing ignored_columns gracefully.
+
+### Column Ignore Configuration
+> Create a configuration structure in YAML format that includes a list of columns to ignore during hash validation, specifically for ETL tools like DLT.
 
 ---
 
@@ -69,11 +91,8 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 
 > Write a Pytest unit test for `compare_row_counts()` with mocked SQLAlchemy engines returning known row counts.
 
----
-
-## 📂 Configuration Loader
-
-> Write a function to load a `settings.yaml` file and return a dictionary of config values for DB connections and validation settings.
+### Hash Validation Tests
+> Write unit tests for hash validation with ignored columns. Test that ignored columns don't affect hash generation.
 
 ---
 
@@ -82,8 +101,11 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 ### Structured Logger
 > Create a logging configuration that writes to both console and file with rotation.
 
-### Log Formatter
-> Write a custom log formatter that includes timestamp, level, and context information.
+### Clean Console Output
+> Write a logging setup that uses print() for clean summary output and logger for detailed process information.
+
+### ETL-Aware Logging
+> Create logging functions that specifically mention which columns are being ignored during validation and why.
 
 ---
 
@@ -97,8 +119,50 @@ This document contains ready-to-use prompts for generative AI agents to help bui
 
 ---
 
+## 🔧 ETL Integration Prompts
+
+### DLT Metadata Handler
+> Write a function that automatically detects and handles DLT metadata columns (`_dlt_load_id`, `_dlt_id`, etc.) during database validation.
+
+### Dynamic Column Ignoring
+> Create a function that can dynamically detect ETL metadata columns based on naming patterns and add them to the ignored list.
+
+### ETL-Friendly Validation
+> Design a validation workflow that focuses on business data while automatically handling technical metadata added by ETL processes.
+
+### Configuration for ETL Tools
+> Generate a configuration template specifically designed for DLT and other ETL tool integrations, including common metadata columns to ignore.
+
+---
+
+## 🏗️ Architecture Prompts
+
+### Modular Validator Design
+> Create a base validator class that can be extended for different validation types (row count, hash, schema) with support for column filtering.
+
+### Plugin Architecture
+> Design a plugin system that allows easy addition of new validation methods and column filtering strategies.
+
+### Config-Driven Validation
+> Write a validation framework that is entirely driven by YAML configuration, including which columns to ignore and which validation methods to use.
+
+---
+
+## 🔍 Debugging and Diagnostics
+
+### Validation Diff Reporter
+> Create a function that shows exactly which columns and rows differ between source and target, excluding ignored columns.
+
+### Schema Comparison Tool
+> Write a utility that compares table schemas and clearly shows which differences are acceptable (ignored columns) vs. problematic.
+
+### Hash Mismatch Analyzer
+> Create a function that takes hash mismatches and helps identify the specific data differences, ignoring configured columns.
+
+---
+
 ## 🧠 Meta: Prompt Guide Generator
 
-> Generate a Markdown prompt library for a Python-based data validation tool with sections like: connection, row check, hashing, reporting, and CLI.
+> Generate a Markdown prompt library for a Python-based data validation tool with sections like: connection, row check, hashing with column filtering, ETL integration, and clean reporting.
 
 ---
