@@ -25,5 +25,6 @@ RUN mkdir -p logs
 # Add current directory to PYTHONPATH
 ENV PYTHONPATH=/app
 
-# Command to run the application
-CMD ["python", "main.py"] 
+# Make entrypoint script executable and ensure it has Unix line endings
+RUN chmod +x entrypoint.sh && \
+    sed -i 's/\r$//' entrypoint.sh 

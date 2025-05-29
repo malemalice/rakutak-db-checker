@@ -14,3 +14,6 @@ connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection re
 2025-05-28 23:41:27 | INFO | Running RowCountValidator
 2025-05-28 23:41:27 | INFO | Running HashValidator
 2025-05-28 23:41:27 | INFO | Running SampleValidator
+2025-05-29 00:03:59 | INFO | Running RowCountValidator
+2025-05-29 00:03:59 | INFO | Running HashValidator
+2025-05-29 00:03:59 | INFO | Running SampleValidator
