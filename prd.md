@@ -29,8 +29,7 @@ This project aims to automate data validation between source and target database
   - Table include/exclude list.
   - Validation types (row count, hash check, sample comparison).
   - Output format and destination.
-  - Execution interval time (in minutes/seconds).
-  - HTTP server port for health check.
+  - Logging configuration.
 
 ### 3.2 Database Connectivity
 
@@ -70,19 +69,6 @@ This project aims to automate data validation between source and target database
 - Log all validation processes and results with timestamps.
 - Store logs in both file and structured format (e.g., JSON) for analysis.
 
-### 3.8 Health Check and Monitoring
-
-- Expose HTTP endpoint for health check (e.g., `/health`).
-- Return service status, last execution time, and basic metrics.
-- Support readiness and liveness probes for container environments.
-
-### 3.9 Scheduled Execution
-
-- Run validation checks at configurable intervals.
-- Support cron-like scheduling patterns.
-- Maintain execution history and track performance metrics.
-- Handle concurrent executions gracefully.
-
 ---
 
 ## 4. Non-Functional Requirements
@@ -97,8 +83,7 @@ This project aims to automate data validation between source and target database
   - Structured logging for machine processing.
   - Human-readable logs for debugging.
   - Log rotation and retention policies.
-- HTTP server for health monitoring.
-- Configurable execution intervals.
+- Docker support for containerized deployment.
 
 ---
 
@@ -126,15 +111,27 @@ data_checker/
 │   ├── hashing.py             # Utility to create hashes from rows
 │   └── table_utils.py         # Table discovery, schema matching, etc.
 │
-├── server/
-│   ├── health.py              # Health check endpoint implementation
-│   └── metrics.py             # Metrics collection and exposure
-│
-├── scheduler/
-│   └── executor.py            # Interval-based execution logic
-│
 ├── logs/
 │   └── .gitkeep              # Directory for log files
 │
 ├── main.py                    # Entry point script
+├── Dockerfile                 # Docker configuration
+├── docker-compose.yml         # Docker Compose configuration
+├── run.sh                     # Shell script for running the validator
 └── README.md                  # Project documentation
+```
+
+---
+
+## 6. Deployment
+
+### 6.1 Direct Installation
+- Python virtual environment setup
+- Manual dependency installation
+- Direct execution via Python
+
+### 6.2 Docker Deployment
+- Docker image build
+- Docker Compose for service orchestration
+- Volume mounting for configuration and logs
+- Shell script for execution

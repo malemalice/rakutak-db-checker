@@ -25,6 +25,13 @@ validation:
   sample_size: 1000
   chunk_size: 10000
 
+  # Columns to ignore during hash validation (commonly added by ETL tools)
+  ignored_columns:
+    - _dlt_load_id
+    - _dlt_id
+    - _extracted_at
+    - _loaded_at
+
 # Table Settings
 tables:
   include: []  # Empty list means all tables

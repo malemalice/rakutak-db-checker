@@ -70,14 +70,47 @@ class BaseValidator(ABC):
             Dict[str, Any]: Validation results for all tables
         """
         results = {}
-        for table in self.tables:
+        validator_name = self.__class__.__name__
+        
+        print(f"\n🚀 Starting {validator_name} for {len(self.tables)} tables")
+        
+        for i, table in enumerate(self.tables, 1):
             try:
-                logger.info(f"Validating table: {table}")
-                results[table] = self.validate_table(table)
+                print(f"[{i}/{len(self.tables)}] Validating table: {table}", end=" ... ")
+                result = self.validate_table(table)
+                results[table] = result
+                
+                # Print immediate result for this table
+                status = result.get("status", "unknown")
+                if status == "success":
+                    print("✅ PASSED")
+                elif status == "mismatch":
+                    if validator_name == "SampleValidator":
+                        source_count = result.get("source_count", 0)
+                        target_count = result.get("target_count", 0)
+                        print(f"❌ FAILED (source: {source_count}, target: {target_count})")
+                    elif validator_name == "RowCountValidator":
+                        source_count = result.get("source_count", 0)
+                        target_count = result.get("target_count", 0)
+                        diff = result.get("difference", 0)
+                        print(f"❌ FAILED (Row count diff: {diff})")
+                    elif validator_name == "HashValidator" and "mismatches" in result:
+                        mismatch_count = len(result["mismatches"])
+                        print(f"❌ FAILED ({mismatch_count} hash mismatches)")
+                    else:
+                        print("❌ FAILED")
+                elif status == "error":
+                    error_msg = result.get("error", "Unknown error")
+                    print(f"⚠️  ERROR - {error_msg}")
+                else:
+                    print(f"❓ UNKNOWN STATUS - {status}")
+                    
             except Exception as e:
-                logger.error(f"Error validating table {table}: {str(e)}")
+                print(f"⚠️  ERROR - {str(e)}")
                 results[table] = {
                     "status": "error",
                     "error": str(e)
                 }
+        
+        print(f"✅ Completed {validator_name} validation")
         return results 
