@@ -1,13 +1,11 @@
 from typing import Dict, Any, List
 from sqlalchemy import Engine
-import logging
+from loguru import logger
 
 from validators.base import BaseValidator
 from validators.row_count import RowCountValidator
 from validators.hash_compare import HashValidator
 from validators.sample_compare import SampleValidator
-
-logger = logging.getLogger(__name__)
 
 class ValidatorFactory:
     @staticmethod
