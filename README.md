@@ -9,8 +9,6 @@ A Python-based tool for validating data between source and target databases duri
   - Row count comparison
   - Hash-based validation
   - Sample data comparison
-- Configurable execution intervals
-- HTTP health check endpoint
 - Comprehensive logging
 - Support for PostgreSQL and MySQL databases
 
@@ -18,8 +16,11 @@ A Python-based tool for validating data between source and target databases duri
 
 - Python 3.8 or newer
 - PostgreSQL or MySQL database
+- Docker and Docker Compose (for Docker installation)
 
 ## Installation
+
+### Direct Installation
 
 1. Clone the repository:
 ```bash
@@ -38,38 +39,111 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### Docker Installation
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd data-checker
+```
+
+2. Create necessary directories:
+```bash
+mkdir -p config logs
+```
+
+3. Create your configuration file:
+```bash
+cp config/settings.yaml.example config/settings.yaml
+# Edit config/settings.yaml with your database settings
+```
+
+4. Build the Docker image:
+```bash
+docker compose build
+```
+
+5. Start the services using Docker Compose:
+```bash
+docker compose up -d
+```
+
 ## Configuration
 
-1. Edit `data_checker/config/settings.yaml` to configure:
+1. Edit `config/settings.yaml` to configure:
    - Database connections
    - Validation settings
    - Table mappings
-   - Server settings
    - Logging configuration
+
+Example configuration:
+```yaml
+source_db:
+  type: postgresql
+  host: localhost
+  port: 5432
+  user: source_user
+  password: source_password
+  database: source_db
+
+target_db:
+  type: mysql
+  host: localhost
+  port: 3306
+  user: target_user
+  password: target_password
+  database: target_db
+
+logging:
+  level: INFO
+  file: logs/validator.log
+  max_size: 10MB
+  backup_count: 5
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+```
 
 ## Usage
 
-1. Start the validator:
+### Direct Usage
+
+1. Run the validator:
 ```bash
-python -m data_checker.main
+python main.py
 ```
 
 2. The application will:
-   - Start the health check server (default: http://localhost:8000)
-   - Begin scheduled validations based on the configured interval
-   - Log all activities to the configured log file
+   - Load the configuration
+   - Connect to source and target databases
+   - Run the configured validations
+   - Log results to the configured log file
 
-3. Check the health status:
+### Docker Usage
+
+1. Make sure Docker Compose is running:
 ```bash
-curl http://localhost:8000/health
+docker compose ps
 ```
 
-## Health Check Endpoint
+2. Run the validator using Docker Compose:
+```bash
+docker compose exec app /app/run.sh run
+```
 
-The health check endpoint (`/health`) provides:
-- Current service status
-- Last execution details
-- Timestamp of the last check
+3. To view logs:
+```bash
+docker compose logs -f app
+```
+
+4. To stop the services:
+```bash
+docker compose down
+```
+
+The application will:
+- Load the configuration from the mounted config directory
+- Connect to source and target databases
+- Run the configured validations
+- Log results to the mounted logs directory
 
 ## Logging
 
@@ -88,8 +162,6 @@ data_checker/
 ├── validators/      # Validation methods
 ├── reports/         # Report generation
 ├── utils/          # Utility functions
-├── server/         # Health check server
-├── scheduler/      # Interval-based execution
 └── logs/           # Log files
 ```
 
