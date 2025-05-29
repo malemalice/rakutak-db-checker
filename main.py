@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Dict, Any
 
 from connectors.factory import create_db_engine
-from server.health import start_server
-from scheduler.executor import ValidationScheduler
 from validators.factory import ValidatorFactory
 
 def load_config() -> Dict[str, Any]:
@@ -98,21 +96,9 @@ def main():
         source_engine = create_db_engine(config['source_db'])
         target_engine = create_db_engine(config['target_db'])
         
-        # Create validation function
-        validation_func = lambda: run_validation(source_engine, target_engine, config)
-        
-        # Initialize scheduler
-        scheduler = ValidationScheduler(
-            interval_minutes=config['validation']['interval_minutes'],
-            validation_func=validation_func
-        )
-        
-        # Start scheduler
-        scheduler.start()
-        
-        # Start health check server
-        server_config = config['server']
-        start_server(server_config['host'], server_config['port'])
+        # Run validation
+        results = run_validation(source_engine, target_engine, config)
+        logger.info(f"Validation completed with status: {results['status']}")
         
     except Exception as e:
         logger.error(f"Application failed to start: {str(e)}")
