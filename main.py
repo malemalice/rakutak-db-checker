@@ -193,10 +193,22 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
                 if "mismatches" in result:
                     mismatch_count = len(result["mismatches"])
                     ignored_cols = result.get("ignored_columns", [])
-                    if ignored_cols:
-                        print(f"   • {table} ({mismatch_count} hash mismatches, ignored: {ignored_cols})")
+                    sampling_used = result.get("sampling_used", False)
+                    
+                    if sampling_used:
+                        sampled_rows = result.get("sampled_rows_source", 0)
+                        total_rows = result.get("total_rows_source", 0)
+                        sample_info = f"sampled {sampled_rows:,}/{total_rows:,} rows"
+                        
+                        if ignored_cols:
+                            print(f"   • {table} ({mismatch_count} hash mismatches in {sample_info}, ignored: {ignored_cols})")
+                        else:
+                            print(f"   • {table} ({mismatch_count} hash mismatches in {sample_info})")
                     else:
-                        print(f"   • {table} ({mismatch_count} hash mismatches)")
+                        if ignored_cols:
+                            print(f"   • {table} ({mismatch_count} hash mismatches, ignored: {ignored_cols})")
+                        else:
+                            print(f"   • {table} ({mismatch_count} hash mismatches)")
                 else:
                     print(f"   • {table}")
             else:
@@ -239,9 +251,14 @@ def _print_overall_summary(summary: Dict[str, Any]) -> None:
     print(f"OVERALL VALIDATION SUMMARY")
     print(f"{'='*60}")
     print(f"Total tables: {total}")
-    print(f"✅ Fully matched: {passed} tables ({passed/total*100:.1f}%)")
-    print(f"❌ Mismatched: {failed} tables ({failed/total*100:.1f}%)")
-    print(f"⚠️  Errors: {errors} tables ({errors/total*100:.1f}%)")
+    
+    if total > 0:
+        print(f"✅ Fully matched: {passed} tables ({passed/total*100:.1f}%)")
+        print(f"❌ Mismatched: {failed} tables ({failed/total*100:.1f}%)")
+        print(f"⚠️  Errors: {errors} tables ({errors/total*100:.1f}%)")
+    else:
+        print("⚠️  No tables found to validate")
+        print("   Check your database configuration and table discovery settings")
     
     if summary["passed_tables"]:
         print(f"\n✅ FULLY MATCHED TABLES:")
