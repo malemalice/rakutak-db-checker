@@ -15,6 +15,7 @@ target_db:
   password: root
   database: check_db_target
 
+
 # Validation Settings
 validation:
   interval_minutes: 5
@@ -24,7 +25,14 @@ validation:
     - sample_comparison
   sample_size: 1000
   chunk_size: 10000
-
+  
+  # Hash validation sampling settings (for performance on large tables)
+  hash_sampling:
+    enabled: true                    # Enable sampling for hash validation
+    max_rows_for_full_scan: 100000   # Tables with more rows will use sampling
+    sample_size: 10000               # Number of rows to sample for large tables
+    sample_method: "random"          # "random" or "systematic"
+  
   # Columns to ignore during hash validation (commonly added by ETL tools)
   ignored_columns:
     - _dlt_load_id
