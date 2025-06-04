@@ -19,6 +19,18 @@ class BaseValidator(ABC):
         self.config = config
         self.tables = self._get_tables_to_validate()
 
+    def _get_database_type(self, engine: Engine) -> str:
+        """
+        Detect the database type from the engine.
+        
+        Args:
+            engine (Engine): SQLAlchemy engine
+            
+        Returns:
+            str: Database type ('postgresql' or 'mysql')
+        """
+        return engine.name
+
     def _get_tables_to_validate(self) -> List[str]:
         """
         Get the list of tables to validate based on configuration.
@@ -32,12 +44,32 @@ class BaseValidator(ABC):
         # If include_tables is empty, get all tables
         if not include_tables:
             with self.source_engine.connect() as conn:
-                result = conn.execute(text("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public'
-                """))
+                db_type = self._get_database_type(self.source_engine)
+                
+                if db_type == 'postgresql':
+                    # PostgreSQL uses 'public' schema by default
+                    query = """
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = 'public'
+                        AND table_type = 'BASE TABLE'
+                    """
+                elif db_type == 'mysql':
+                    # MySQL uses the database name as the schema
+                    database_name = self.config['source_db']['database']
+                    query = f"""
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = '{database_name}'
+                        AND table_type = 'BASE TABLE'
+                    """
+                else:
+                    raise ValueError(f"Unsupported database type: {db_type}")
+                
+                logger.info(f"Discovering tables for {db_type} database")
+                result = conn.execute(text(query))
                 tables = [row[0] for row in result]
+                logger.info(f"Found {len(tables)} tables in source database: {tables}")
         else:
             tables = include_tables
             

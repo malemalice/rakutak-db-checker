@@ -239,9 +239,14 @@ def _print_overall_summary(summary: Dict[str, Any]) -> None:
     print(f"OVERALL VALIDATION SUMMARY")
     print(f"{'='*60}")
     print(f"Total tables: {total}")
-    print(f"✅ Fully matched: {passed} tables ({passed/total*100:.1f}%)")
-    print(f"❌ Mismatched: {failed} tables ({failed/total*100:.1f}%)")
-    print(f"⚠️  Errors: {errors} tables ({errors/total*100:.1f}%)")
+    
+    if total > 0:
+        print(f"✅ Fully matched: {passed} tables ({passed/total*100:.1f}%)")
+        print(f"❌ Mismatched: {failed} tables ({failed/total*100:.1f}%)")
+        print(f"⚠️  Errors: {errors} tables ({errors/total*100:.1f}%)")
+    else:
+        print("⚠️  No tables found to validate")
+        print("   Check your database configuration and table discovery settings")
     
     if summary["passed_tables"]:
         print(f"\n✅ FULLY MATCHED TABLES:")

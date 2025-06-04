@@ -29,7 +29,8 @@ def create_db_engine(config: Dict[str, Any]) -> Engine:
     if db_type == 'postgresql':
         connection_string = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
     elif db_type == 'mysql':
-        connection_string = f"mysql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
+        # Use mysql+pymysql for PyMySQL driver
+        connection_string = f"mysql+pymysql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
     
