@@ -5,7 +5,10 @@ import json
 import random
 from loguru import logger
 from validators.base import BaseValidator
-from utils.sql_utils import get_database_type, build_select_query, build_where_clause_for_pk, escape_column_name
+from utils.sql_utils import (
+    get_database_type, build_select_query, build_where_clause_for_pk, escape_column_name,
+    get_suitable_row_identifier, create_row_signature
+)
 
 class HashValidator(BaseValidator):
     def __init__(self, source_engine, target_engine, config):
@@ -50,20 +53,19 @@ class HashValidator(BaseValidator):
         """
         return [col for col in columns if col not in self.ignored_columns]
 
-    def _get_primary_key(self, table_name: str, engine) -> List[str]:
+    def _get_row_identifier(self, table_name: str, engine, available_columns: List[str] = None) -> Tuple[List[str], str]:
         """
-        Get the primary key columns for a table.
+        Get the best available row identifier for a table.
         
         Args:
             table_name (str): Name of the table
             engine: SQLAlchemy engine
+            available_columns: List of available columns to choose from
             
         Returns:
-            List[str]: List of primary key column names
+            Tuple[List[str], str]: (identifier_columns, identifier_type)
         """
-        metadata = MetaData()
-        table = Table(table_name, metadata, autoload_with=engine)
-        return [c.name for c in table.primary_key.columns]
+        return get_suitable_row_identifier(table_name, engine, available_columns)
 
     def _generate_row_hash(self, row: Tuple, filtered_columns: List[str]) -> str:
         """
@@ -81,31 +83,32 @@ class HashValidator(BaseValidator):
         row_json = json.dumps(row_dict, sort_keys=True)
         return hashlib.md5(row_json.encode()).hexdigest()
 
-    def _get_table_hashes_with_sampling(self, table_name: str, engine, pk_columns: List[str], filtered_columns: List[str], total_rows: int) -> Dict[str, str]:
+    def _get_table_hashes_with_sampling(self, table_name: str, engine, identifier_columns: List[str], filtered_columns: List[str], total_rows: int, identifier_type: str) -> Dict[str, str]:
         """
         Get hashes for rows in a table using sampling for large tables.
         
         Args:
             table_name (str): Name of the table
             engine: SQLAlchemy engine
-            pk_columns (List[str]): List of primary key column names
+            identifier_columns (List[str]): List of row identifier column names
             filtered_columns (List[str]): Columns to include in hash calculation
             total_rows (int): Total number of rows in the table
+            identifier_type (str): Type of identifier (primary_key, unique_constraint, all_columns)
             
         Returns:
-            Dict[str, str]: Dictionary mapping primary key values to row hashes
+            Dict[str, str]: Dictionary mapping row identifiers to row hashes
         """
         use_sampling = (self.sampling_enabled and 
                        total_rows > self.max_rows_for_full_scan)
         
         if use_sampling:
             logger.info(f"Table {table_name} has {total_rows:,} rows - using random sampling ({self.sample_size:,} samples)")
-            return self._get_sampled_table_hashes(table_name, engine, pk_columns, filtered_columns, total_rows)
+            return self._get_sampled_table_hashes(table_name, engine, identifier_columns, filtered_columns, total_rows, identifier_type)
         else:
             logger.info(f"Table {table_name} has {total_rows:,} rows - using full scan")
-            return self._get_all_table_hashes(table_name, engine, pk_columns, filtered_columns)
+            return self._get_all_table_hashes(table_name, engine, identifier_columns, filtered_columns, identifier_type)
 
-    def _get_sampled_table_hashes(self, table_name: str, engine, pk_columns: List[str], filtered_columns: List[str], total_rows: int) -> Dict[str, str]:
+    def _get_sampled_table_hashes(self, table_name: str, engine, identifier_columns: List[str], filtered_columns: List[str], total_rows: int, identifier_type: str) -> Dict[str, str]:
         """
         Get hashes for a random sample of rows in a table.
         
@@ -160,28 +163,29 @@ class HashValidator(BaseValidator):
         else:
             # Fallback: use LIMIT with chunked scanning
             logger.warning(f"Database type {db_type} may not support efficient sampling, using chunked approach")
-            return self._get_chunked_sample_hashes(table_name, engine, pk_columns, filtered_columns, total_rows)
+            return self._get_chunked_sample_hashes(table_name, engine, identifier_columns, filtered_columns, total_rows, identifier_type)
         
         hashes = {}
         with engine.connect() as conn:
             rows = conn.execute(query).fetchall()
             
             for row in rows:
-                # Get primary key values
-                pk_values = []
-                for pk_col in pk_columns:
-                    if pk_col in filtered_columns:
-                        pk_index = filtered_columns.index(pk_col)
-                        pk_values.append(str(row[pk_index]))
-                pk_values = tuple(pk_values)
+                # Get identifier values
+                identifier_values = []
+                for id_col in identifier_columns:
+                    if id_col in filtered_columns:
+                        id_index = filtered_columns.index(id_col)
+                        identifier_values.append(row[id_index])
                 
+                # Create row signature based on identifier type
+                row_signature = create_row_signature(identifier_values, identifier_columns, identifier_type)
                 row_hash = self._generate_row_hash(row, filtered_columns)
-                hashes[pk_values] = row_hash
+                hashes[row_signature] = row_hash
         
         logger.info(f"Successfully sampled {len(hashes):,} rows from {table_name}")
         return hashes
 
-    def _get_chunked_sample_hashes(self, table_name: str, engine, pk_columns: List[str], filtered_columns: List[str], total_rows: int) -> Dict[str, str]:
+    def _get_chunked_sample_hashes(self, table_name: str, engine, identifier_columns: List[str], filtered_columns: List[str], total_rows: int, identifier_type: str) -> Dict[str, str]:
         """
         Get hashes using a chunked random sampling approach for databases that don't support native sampling.
         
@@ -210,11 +214,14 @@ class HashValidator(BaseValidator):
             if random_offset >= total_rows:
                 break
                 
+            # For tables without unique identifiers, ordering might be problematic
+            order_by_cols = identifier_columns if identifier_type != 'all_columns' else None
+            
             query_str = build_select_query(
                 columns=filtered_columns,
                 table_name=table_name,
                 db_type=get_database_type(engine),
-                order_by=pk_columns,
+                order_by=order_by_cols,
                 limit=min(chunk_sample_size, self.sample_size - sampled_count),
                 offset=random_offset
             )
@@ -224,15 +231,16 @@ class HashValidator(BaseValidator):
                 rows = conn.execute(query).fetchall()
                 
                 for row in rows:
-                    pk_values = []
-                    for pk_col in pk_columns:
-                        if pk_col in filtered_columns:
-                            pk_index = filtered_columns.index(pk_col)
-                            pk_values.append(str(row[pk_index]))
-                    pk_values = tuple(pk_values)
+                    identifier_values = []
+                    for id_col in identifier_columns:
+                        if id_col in filtered_columns:
+                            id_index = filtered_columns.index(id_col)
+                            identifier_values.append(row[id_index])
                     
+                    # Create row signature based on identifier type
+                    row_signature = create_row_signature(identifier_values, identifier_columns, identifier_type)
                     row_hash = self._generate_row_hash(row, filtered_columns)
-                    hashes[pk_values] = row_hash
+                    hashes[row_signature] = row_hash
                     sampled_count += 1
                     
                     if sampled_count >= self.sample_size:
@@ -243,7 +251,7 @@ class HashValidator(BaseValidator):
         logger.info(f"Chunked sampling collected {len(hashes):,} rows from {table_name}")
         return hashes
 
-    def _get_all_table_hashes(self, table_name: str, engine, pk_columns: List[str], filtered_columns: List[str]) -> Dict[str, str]:
+    def _get_all_table_hashes(self, table_name: str, engine, identifier_columns: List[str], filtered_columns: List[str], identifier_type: str) -> Dict[str, str]:
         """
         Get hashes for all rows in a table (original implementation).
         
@@ -260,11 +268,14 @@ class HashValidator(BaseValidator):
         offset = 0
         
         while True:
+            # For tables without unique identifiers, ordering might be problematic
+            order_by_cols = identifier_columns if identifier_type != 'all_columns' else None
+            
             query_str = build_select_query(
                 columns=filtered_columns,
                 table_name=table_name,
                 db_type=get_database_type(engine),
-                order_by=pk_columns,
+                order_by=order_by_cols,
                 limit=self.chunk_size,
                 offset=offset
             )
@@ -277,15 +288,16 @@ class HashValidator(BaseValidator):
                 break
                 
             for row in rows:
-                pk_values = []
-                for pk_col in pk_columns:
-                    if pk_col in filtered_columns:
-                        pk_index = filtered_columns.index(pk_col)
-                        pk_values.append(str(row[pk_index]))
-                pk_values = tuple(pk_values)
+                identifier_values = []
+                for id_col in identifier_columns:
+                    if id_col in filtered_columns:
+                        id_index = filtered_columns.index(id_col)
+                        identifier_values.append(row[id_index])
                 
+                # Create row signature based on identifier type
+                row_signature = create_row_signature(identifier_values, identifier_columns, identifier_type)
                 row_hash = self._generate_row_hash(row, filtered_columns)
-                hashes[pk_values] = row_hash
+                hashes[row_signature] = row_hash
                 
             offset += self.chunk_size
             
@@ -326,23 +338,34 @@ class HashValidator(BaseValidator):
             logger.error(f"Error fetching row data for logging: {str(e)}")
             return {}
 
-    def _log_detailed_mismatch(self, table_name: str, pk_values: Tuple, source_pk: List[str], final_columns: List[str], mismatch_count: int):
+    def _log_detailed_mismatch(self, table_name: str, row_identifier: str, identifier_columns: List[str], final_columns: List[str], mismatch_count: int, identifier_type: str):
         """
         Log detailed information about hash mismatches.
         
         Args:
             table_name (str): Name of the table
-            pk_values (Tuple): Primary key values of mismatched row
-            source_pk (List[str]): Primary key column names
+            row_identifier (str): Row identifier value of mismatched row
+            identifier_columns (List[str]): Row identifier column names
             final_columns (List[str]): Columns used for hashing
             mismatch_count (int): Current mismatch count for progress
+            identifier_type (str): Type of identifier (primary_key, unique_constraint, all_columns)
         """
         logger.info(f"=== HASH MISMATCH #{mismatch_count} IN TABLE '{table_name}' ===")
-        logger.info(f"Primary key: {dict(zip(source_pk, pk_values))}")
+        logger.info(f"Row identifier ({identifier_type}): {row_identifier}")
         
-        # Get detailed row data from both databases
-        source_row = self._get_row_data_for_logging(table_name, self.source_engine, source_pk, final_columns, pk_values)
-        target_row = self._get_row_data_for_logging(table_name, self.target_engine, source_pk, final_columns, pk_values)
+        # For detailed row comparison, we need the actual values, not the signature
+        # This is complex for 'all_columns' type, so we'll only do it for primary_key and unique_constraint
+        if identifier_type in ['primary_key', 'unique_constraint']:
+            # Parse the row identifier back to individual values
+            pk_values = tuple(row_identifier.split('|'))
+            
+            # Get detailed row data from both databases
+            source_row = self._get_row_data_for_logging(table_name, self.source_engine, identifier_columns, final_columns, pk_values)
+            target_row = self._get_row_data_for_logging(table_name, self.target_engine, identifier_columns, final_columns, pk_values)
+        else:
+            logger.warning(f"Detailed row comparison not available for tables without unique identifiers")
+            source_row = {}
+            target_row = {}
         
         if source_row and target_row:
             logger.info("SOURCE ROW DATA:")
@@ -426,29 +449,45 @@ class HashValidator(BaseValidator):
                     "error": f"Column order mismatch (excluding ignored): source={source_filtered}, target={target_filtered}"
                 }
             
-            # Get primary key columns
-            source_pk = self._get_primary_key(table_name, self.source_engine)
-            target_pk = self._get_primary_key(table_name, self.target_engine)
+            # Get row identifier columns
+            source_identifier, source_id_type = self._get_row_identifier(table_name, self.source_engine, source_filtered)
+            target_identifier, target_id_type = self._get_row_identifier(table_name, self.target_engine, target_filtered)
             
-            if source_pk != target_pk:
+            # Check if identifier types match
+            if source_id_type != target_id_type:
                 return {
                     "status": "error",
-                    "error": f"Primary key mismatch: source={source_pk}, target={target_pk}"
+                    "error": f"Row identifier type mismatch: source={source_id_type}, target={target_id_type}"
                 }
             
-            # Ensure primary key columns are included in filtered columns
+            # Check if identifier columns match
+            if source_identifier != target_identifier:
+                return {
+                    "status": "error",
+                    "error": f"Row identifier columns mismatch: source={source_identifier}, target={target_identifier}"
+                }
+            
+            # Ensure identifier columns are included in filtered columns
             final_columns = source_filtered.copy()
-            for pk_col in source_pk:
-                if pk_col not in final_columns:
-                    final_columns.append(pk_col)
+            for id_col in source_identifier:
+                if id_col not in final_columns:
+                    final_columns.append(id_col)
+            
+            # Log information about identifier type
+            if source_id_type == 'primary_key':
+                logger.info(f"Using primary key {source_identifier} for table {table_name}")
+            elif source_id_type == 'unique_constraint':
+                logger.warning(f"Table {table_name} has no primary key, using unique constraint {source_identifier}")
+            else:  # all_columns
+                logger.warning(f"Table {table_name} has no unique identifiers, using all columns for comparison (performance impact expected)")
             
             # Get hashes for both tables using filtered columns
             logger.info(f"Generating hashes for table {table_name} using columns: {final_columns}")
             source_row_count = self._get_table_row_count(table_name, self.source_engine)
             target_row_count = self._get_table_row_count(table_name, self.target_engine)
             
-            source_hashes = self._get_table_hashes_with_sampling(table_name, self.source_engine, source_pk, final_columns, source_row_count)
-            target_hashes = self._get_table_hashes_with_sampling(table_name, self.target_engine, target_pk, final_columns, target_row_count)
+            source_hashes = self._get_table_hashes_with_sampling(table_name, self.source_engine, source_identifier, final_columns, source_row_count, source_id_type)
+            target_hashes = self._get_table_hashes_with_sampling(table_name, self.target_engine, target_identifier, final_columns, target_row_count, target_id_type)
             
             # Determine if sampling was used
             sampling_used = (self.sampling_enabled and 
@@ -459,34 +498,34 @@ class HashValidator(BaseValidator):
             mismatches = []
             mismatch_count = 0
             
-            for pk, source_hash in source_hashes.items():
-                if pk not in target_hashes:
+            for row_id, source_hash in source_hashes.items():
+                if row_id not in target_hashes:
                     mismatches.append({
-                        "primary_key": pk,
+                        "row_identifier": row_id,
                         "status": "missing_in_target",
                         "source_hash": source_hash
                     })
-                    logger.warning(f"Row missing in target - PK: {dict(zip(source_pk, pk))}")
-                elif target_hashes[pk] != source_hash:
+                    logger.warning(f"Row missing in target - Identifier: {row_id}")
+                elif target_hashes[row_id] != source_hash:
                     mismatch_count += 1
                     mismatches.append({
-                        "primary_key": pk,
+                        "row_identifier": row_id,
                         "status": "hash_mismatch",
                         "source_hash": source_hash,
-                        "target_hash": target_hashes[pk]
+                        "target_hash": target_hashes[row_id]
                     })
                     # Log detailed mismatch information
-                    self._log_detailed_mismatch(table_name, pk, source_pk, final_columns, mismatch_count)
+                    self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type)
             
             # Check for rows in target but not in source
-            for pk in target_hashes:
-                if pk not in source_hashes:
+            for row_id in target_hashes:
+                if row_id not in source_hashes:
                     mismatches.append({
-                        "primary_key": pk,
+                        "row_identifier": row_id,
                         "status": "missing_in_source",
-                        "target_hash": target_hashes[pk]
+                        "target_hash": target_hashes[row_id]
                     })
-                    logger.warning(f"Row missing in source - PK: {dict(zip(source_pk, pk))}")
+                    logger.warning(f"Row missing in source - Identifier: {row_id}")
             
             result = {
                 "status": "success" if not mismatches else "mismatch",

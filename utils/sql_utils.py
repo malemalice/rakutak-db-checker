@@ -1,5 +1,7 @@
-from typing import List
+from typing import List, Optional, Tuple
 from sqlalchemy.engine import Engine
+from sqlalchemy import MetaData, Table, text
+from loguru import logger
 
 # MySQL/MariaDB reserved keywords that need escaping
 MYSQL_RESERVED_KEYWORDS = {
@@ -83,6 +85,142 @@ def escape_column_list(columns: List[str], db_type: str) -> List[str]:
     return [escape_column_name(col, db_type) for col in columns]
 
 
+def get_table_columns(table_name: str, engine: Engine) -> List[str]:
+    """
+    Get all column names for a table.
+    
+    Args:
+        table_name: Name of the table
+        engine: SQLAlchemy engine
+        
+    Returns:
+        List[str]: List of column names
+    """
+    try:
+        metadata = MetaData()
+        table = Table(table_name, metadata, autoload_with=engine)
+        return [col.name for col in table.columns]
+    except Exception as e:
+        logger.error(f"Error getting columns for table {table_name}: {str(e)}")
+        return []
+
+
+def get_primary_key_columns(table_name: str, engine: Engine) -> List[str]:
+    """
+    Get primary key columns for a table.
+    
+    Args:
+        table_name: Name of the table
+        engine: SQLAlchemy engine
+        
+    Returns:
+        List[str]: List of primary key column names (empty if no primary key)
+    """
+    try:
+        metadata = MetaData()
+        table = Table(table_name, metadata, autoload_with=engine)
+        pk_columns = [c.name for c in table.primary_key.columns]
+        
+        if pk_columns:
+            logger.debug(f"Table {table_name} has primary key: {pk_columns}")
+        else:
+            logger.warning(f"Table {table_name} has no primary key defined")
+            
+        return pk_columns
+    except Exception as e:
+        logger.error(f"Error getting primary key for table {table_name}: {str(e)}")
+        return []
+
+
+def get_unique_columns(table_name: str, engine: Engine) -> List[List[str]]:
+    """
+    Get unique constraint columns for a table.
+    
+    Args:
+        table_name: Name of the table
+        engine: SQLAlchemy engine
+        
+    Returns:
+        List[List[str]]: List of unique constraints, each containing column names
+    """
+    try:
+        metadata = MetaData()
+        table = Table(table_name, metadata, autoload_with=engine)
+        
+        unique_constraints = []
+        for constraint in table.constraints:
+            if hasattr(constraint, 'columns') and len(constraint.columns) > 0:
+                # Check if it's a unique constraint (not primary key)
+                if constraint.__class__.__name__ == 'UniqueConstraint':
+                    constraint_cols = [col.name for col in constraint.columns]
+                    unique_constraints.append(constraint_cols)
+        
+        return unique_constraints
+    except Exception as e:
+        logger.error(f"Error getting unique constraints for table {table_name}: {str(e)}")
+        return []
+
+
+def get_suitable_row_identifier(table_name: str, engine: Engine, available_columns: List[str] = None) -> Tuple[List[str], str]:
+    """
+    Get the best available row identifier for a table.
+    
+    Priority order:
+    1. Primary key columns
+    2. Single unique constraint columns
+    3. All columns (for tables without any unique identifier)
+    
+    Args:
+        table_name: Name of the table
+        engine: SQLAlchemy engine
+        available_columns: List of available columns to choose from (optional)
+        
+    Returns:
+        Tuple[List[str], str]: (identifier_columns, identifier_type)
+        identifier_type can be: 'primary_key', 'unique_constraint', 'all_columns'
+    """
+    # Get primary key columns
+    pk_columns = get_primary_key_columns(table_name, engine)
+    
+    if pk_columns:
+        # Filter primary key columns by available columns if specified
+        if available_columns:
+            pk_columns = [col for col in pk_columns if col in available_columns]
+            if pk_columns:
+                return pk_columns, 'primary_key'
+        else:
+            return pk_columns, 'primary_key'
+    
+    logger.warning(f"Table {table_name} has no primary key, checking for unique constraints...")
+    
+    # Try to find unique constraints
+    unique_constraints = get_unique_columns(table_name, engine)
+    
+    for unique_cols in unique_constraints:
+        # Filter by available columns if specified
+        if available_columns:
+            filtered_unique = [col for col in unique_cols if col in available_columns]
+            if len(filtered_unique) == len(unique_cols):  # All unique columns are available
+                logger.info(f"Using unique constraint {filtered_unique} as row identifier for table {table_name}")
+                return filtered_unique, 'unique_constraint'
+        else:
+            logger.info(f"Using unique constraint {unique_cols} as row identifier for table {table_name}")
+            return unique_cols, 'unique_constraint'
+    
+    # No unique identifier found, use all columns
+    if available_columns:
+        all_cols = available_columns
+    else:
+        all_cols = get_table_columns(table_name, engine)
+    
+    logger.warning(
+        f"Table {table_name} has no primary key or unique constraints. "
+        f"Using all columns as row identifier. This may impact performance and accuracy."
+    )
+    
+    return all_cols, 'all_columns'
+
+
 def build_select_query(
     columns: List[str], 
     table_name: str, 
@@ -148,4 +286,32 @@ def build_where_clause_for_pk(pk_columns: List[str], pk_values: tuple, db_type: 
         conditions = []
         for i, col in enumerate(escaped_columns):
             conditions.append(f"{col} = '{pk_values[i]}'")
-        return " AND ".join(conditions) 
+        return " AND ".join(conditions)
+
+
+def create_row_signature(row_data: List, identifier_columns: List[str], identifier_type: str) -> str:
+    """
+    Create a unique signature for a row based on available identifier columns.
+    
+    Args:
+        row_data: List of row values
+        identifier_columns: List of column names used as identifier
+        identifier_type: Type of identifier ('primary_key', 'unique_constraint', 'all_columns')
+        
+    Returns:
+        str: Unique row signature
+    """
+    import hashlib
+    import json
+    
+    if identifier_type == 'all_columns':
+        # For tables without unique identifiers, create a hash of all column values
+        # This is less reliable but the best we can do
+        row_dict = {col: str(val) for col, val in zip(identifier_columns, row_data)}
+        row_json = json.dumps(row_dict, sort_keys=True)
+        return hashlib.md5(row_json.encode()).hexdigest()
+    else:
+        # For primary keys and unique constraints, create a more readable signature
+        # Preserve the order of identifier columns (important for composite keys)
+        ordered_values = [str(val) for val in row_data]
+        return '|'.join(ordered_values) 
