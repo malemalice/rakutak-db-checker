@@ -5,6 +5,7 @@ import json
 import random
 from loguru import logger
 from validators.base import BaseValidator
+from utils.sql_utils import get_database_type, build_select_query, build_where_clause_for_pk, escape_column_name
 
 class HashValidator(BaseValidator):
     def __init__(self, source_engine, target_engine, config):
@@ -30,7 +31,9 @@ class HashValidator(BaseValidator):
         Returns:
             int: Total number of rows in the table
         """
-        query = text(f"SELECT COUNT(*) FROM {table_name}")
+        db_type = get_database_type(engine)
+        escaped_table = escape_column_name(table_name, db_type)
+        query = text(f"SELECT COUNT(*) FROM {escaped_table}")
         with engine.connect() as conn:
             result = conn.execute(query).fetchone()
             return result[0] if result else 0
@@ -116,13 +119,17 @@ class HashValidator(BaseValidator):
         Returns:
             Dict[str, str]: Dictionary mapping primary key values to row hashes
         """
-        db_type = self._get_database_type(engine)
+        db_type = get_database_type(engine)
         
         if db_type == 'mysql':
             # MySQL TABLESAMPLE is not widely supported, use ORDER BY RAND()
+            # RAND() is a function, not a column, so we build the query manually
+            from utils.sql_utils import escape_column_list, escape_column_name
+            escaped_columns = escape_column_list(filtered_columns, db_type)
+            escaped_table = escape_column_name(table_name, db_type)
             query = text(f"""
-                SELECT {', '.join(filtered_columns)}
-                FROM {table_name}
+                SELECT {', '.join(escaped_columns)}
+                FROM {escaped_table}
                 ORDER BY RAND()
                 LIMIT {self.sample_size}
             """)
@@ -130,16 +137,24 @@ class HashValidator(BaseValidator):
             # PostgreSQL supports TABLESAMPLE
             sample_percent = min(100, (self.sample_size / total_rows) * 100)
             if sample_percent < 0.01:  # If percentage is too small, use LIMIT with ORDER BY RANDOM()
+                # RANDOM() is a function, not a column, so we build the query manually
+                from utils.sql_utils import escape_column_list, escape_column_name
+                escaped_columns = escape_column_list(filtered_columns, db_type)
+                escaped_table = escape_column_name(table_name, db_type)
                 query = text(f"""
-                    SELECT {', '.join(filtered_columns)}
-                    FROM {table_name}
+                    SELECT {', '.join(escaped_columns)}
+                    FROM {escaped_table}
                     ORDER BY RANDOM()
                     LIMIT {self.sample_size}
                 """)
             else:
+                # For TABLESAMPLE, we need to build manually since it's not a standard ORDER BY
+                from utils.sql_utils import escape_column_list, escape_column_name
+                escaped_columns = escape_column_list(filtered_columns, db_type)
+                escaped_table = escape_column_name(table_name, db_type)
                 query = text(f"""
-                    SELECT {', '.join(filtered_columns)}
-                    FROM {table_name} TABLESAMPLE BERNOULLI({sample_percent})
+                    SELECT {', '.join(escaped_columns)}
+                    FROM {escaped_table} TABLESAMPLE BERNOULLI({sample_percent})
                     LIMIT {self.sample_size}
                 """)
         else:
@@ -195,13 +210,15 @@ class HashValidator(BaseValidator):
             if random_offset >= total_rows:
                 break
                 
-            query = text(f"""
-                SELECT {', '.join(filtered_columns)}
-                FROM {table_name}
-                ORDER BY {', '.join(pk_columns)}
-                LIMIT {min(chunk_sample_size, self.sample_size - sampled_count)}
-                OFFSET {random_offset}
-            """)
+            query_str = build_select_query(
+                columns=filtered_columns,
+                table_name=table_name,
+                db_type=get_database_type(engine),
+                order_by=pk_columns,
+                limit=min(chunk_sample_size, self.sample_size - sampled_count),
+                offset=random_offset
+            )
+            query = text(query_str)
             
             with engine.connect() as conn:
                 rows = conn.execute(query).fetchall()
@@ -243,13 +260,15 @@ class HashValidator(BaseValidator):
         offset = 0
         
         while True:
-            query = text(f"""
-                SELECT {', '.join(filtered_columns)}
-                FROM {table_name}
-                ORDER BY {', '.join(pk_columns)}
-                LIMIT {self.chunk_size}
-                OFFSET {offset}
-            """)
+            query_str = build_select_query(
+                columns=filtered_columns,
+                table_name=table_name,
+                db_type=get_database_type(engine),
+                order_by=pk_columns,
+                limit=self.chunk_size,
+                offset=offset
+            )
+            query = text(query_str)
             
             with engine.connect() as conn:
                 rows = conn.execute(query).fetchall()
@@ -287,16 +306,16 @@ class HashValidator(BaseValidator):
             Dict[str, Any]: Row data as dictionary
         """
         try:
-            # Build WHERE clause for primary key
-            if len(pk_columns) == 1:
-                where_clause = f"{pk_columns[0]} = '{pk_values[0]}'"
-            else:
-                conditions = []
-                for i, col in enumerate(pk_columns):
-                    conditions.append(f"{col} = '{pk_values[i]}'")
-                where_clause = " AND ".join(conditions)
+            db_type = get_database_type(engine)
+            where_clause = build_where_clause_for_pk(pk_columns, pk_values, db_type)
             
-            query = text(f"SELECT {', '.join(final_columns)} FROM {table_name} WHERE {where_clause}")
+            query_str = build_select_query(
+                columns=final_columns,
+                table_name=table_name,
+                db_type=db_type,
+                where_clause=where_clause
+            )
+            query = text(query_str)
             
             with engine.connect() as conn:
                 row = conn.execute(query).fetchone()

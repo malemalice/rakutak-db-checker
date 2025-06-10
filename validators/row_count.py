@@ -2,6 +2,7 @@ from sqlalchemy import text
 from typing import Dict, Any
 from loguru import logger
 from validators.base import BaseValidator
+from utils.sql_utils import get_database_type, escape_column_name
 
 class RowCountValidator(BaseValidator):
     def validate_table(self, table_name: str) -> Dict[str, Any]:
@@ -15,13 +16,20 @@ class RowCountValidator(BaseValidator):
             Dict[str, Any]: Validation results including row counts and status
         """
         try:
+            # Get database types and escape table name
+            source_db_type = get_database_type(self.source_engine)
+            target_db_type = get_database_type(self.target_engine)
+            
+            source_table_escaped = escape_column_name(table_name, source_db_type)
+            target_table_escaped = escape_column_name(table_name, target_db_type)
+            
             # Get source row count
             with self.source_engine.connect() as conn:
-                source_count = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
+                source_count = conn.execute(text(f"SELECT COUNT(*) FROM {source_table_escaped}")).scalar()
             
             # Get target row count
             with self.target_engine.connect() as conn:
-                target_count = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
+                target_count = conn.execute(text(f"SELECT COUNT(*) FROM {target_table_escaped}")).scalar()
             
             # Calculate difference
             diff = source_count - target_count
