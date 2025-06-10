@@ -56,10 +56,12 @@ This project aims to automate data validation between source and target database
 
 - Create consistent row-level hashes using MD5 or SHA256.
 - **Column filtering**: Ignore specified columns (e.g., `_dlt_load_id`, `created_at`) during hash generation.
-- Compare hashes between source and target for matching primary keys.
+- Compare hashes between source and target for matching row identifiers.
 - Allow chunking for large tables.
 - **Schema validation**: Detect column differences while allowing ignored columns to exist only in target.
 - **Detailed mismatch logging**: Log complete source and target row data when hash mismatches occur.
+- **Flexible row identification**: Support primary keys, unique constraints, or all-column comparison.
+- **Composite primary key support**: Handle multi-column primary keys seamlessly.
 
 ### 3.6 Sample Data Comparison
 
@@ -90,6 +92,15 @@ This project aims to automate data validation between source and target database
 - **DLT compatibility**: Default ignore list includes `_dlt_load_id`, `_dlt_id`, `_extracted_at`, `_loaded_at`
 - **Audit column handling**: Optional ignoring of `created_at`, `updated_at`, `modified_at`
 - **Clear reporting**: Show ignored columns in validation summaries
+
+### 3.10 Advanced Primary Key Handling
+
+- **No Primary Key Support**: Automatic fallback to unique constraints when primary keys are missing
+- **Composite Primary Key Support**: Full support for multi-column primary keys of any size
+- **Unique Constraint Fallback**: Use unique constraints as row identifiers when no primary key exists
+- **All-Column Comparison**: Last resort option for tables without any unique identifiers
+- **Performance Warnings**: Clear alerts when using performance-impacting fallback methods
+- **Configurable Behavior**: Settings to control fallback strategies and validation approaches
 
 ---
 
@@ -150,6 +161,11 @@ validation:
     - _loaded_at        # ETL load timestamp
     - created_at        # Record creation timestamp
     - updated_at        # Record modification timestamp
+  
+  # Primary key handling configuration
+  allow_tables_without_pk: true          # Allow validation of tables without primary keys
+  fallback_to_unique_constraints: true   # Use unique constraints if no primary key
+  allow_all_columns_identifier: false    # Use all columns as identifier (performance impact)
 
 # Table configuration
 tables:
@@ -230,6 +246,8 @@ Total tables validated: 5
 
 ❌ FAILED TABLES:
    • orders (3 hash mismatches, ignored: ['_dlt_load_id', 'created_at'])
+   • user_sessions (no primary key, using unique constraint: ['session_token'])
+   • temp_data (no unique identifiers, using all-column comparison - performance impact)
 
 📋 DETAILED LOGS:
    For row-by-row data comparison of mismatched records,

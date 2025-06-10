@@ -175,15 +175,73 @@ query = build_select_query(
 # Result: SELECT id, `order`, `type`, `status` FROM program_galleries ORDER BY id LIMIT 10000
 ```
 
-### 3.2 Validation Algorithms
+### 3.2 Primary Key & Row Identifier Handling
 
-#### 3.2.1 Row Count Validation
+#### 3.2.1 Row Identifier Strategy
+The system uses a flexible approach to identify rows for comparison:
+
+**Priority Order:**
+1. **Primary Key**: Preferred method for row identification
+2. **Unique Constraints**: Fallback when no primary key exists
+3. **All Columns**: Last resort for tables without any unique identifier
+
+```python
+# Enhanced primary key detection
+from utils.sql_utils import get_suitable_row_identifier
+
+identifier_columns, identifier_type = get_suitable_row_identifier(
+    table_name="user_sessions", 
+    engine=source_engine,
+    available_columns=filtered_columns
+)
+
+# identifier_type can be: 'primary_key', 'unique_constraint', 'all_columns'
+```
+
+#### 3.2.2 Handling Tables Without Primary Keys
+```python
+# Configuration for tables without primary keys
+validation:
+  allow_tables_without_pk: true
+  fallback_to_unique_constraints: true
+  allow_all_columns_identifier: false  # Performance consideration
+
+# Automatic fallback logic
+if no_primary_key:
+    if unique_constraints_exist and fallback_to_unique_constraints:
+        use_unique_constraint()
+    elif allow_all_columns_identifier:
+        use_all_columns()  # Performance impact warning
+    else:
+        skip_table()  # Report as error
+```
+
+#### 3.2.3 Composite Primary Key Support
+```python
+# Multi-column primary keys are fully supported
+composite_pk = ['user_id', 'session_id', 'timestamp']
+row_signature = create_row_signature(
+    row_data=[123, 'abc', '2024-01-01'],
+    identifier_columns=composite_pk,
+    identifier_type='primary_key'
+)
+# Result: "123|abc|2024-01-01"
+```
+
+#### 3.2.4 Performance Considerations
+- **Primary Keys**: Optimal performance, reliable ordering
+- **Unique Constraints**: Good performance, reliable identification
+- **All Columns**: Poor performance, unreliable for large tables
+
+### 3.3 Validation Algorithms
+
+#### 3.3.1 Row Count Validation
 - **Algorithm**: Direct COUNT(*) queries
 - **Performance**: O(1) per table (database optimized)
 - **Memory**: Minimal (single integer per table)
 - **Error Handling**: Connection timeout, table access permissions
 
-#### 3.2.2 Hash-Based Validation
+#### 3.3.2 Hash-Based Validation
 - **Algorithm**: MD5/SHA256 per row with column filtering
 - **Chunking**: Process tables in configurable chunks (default: 10,000 rows)
 - **Memory**: O(chunk_size) rows in memory
@@ -198,15 +256,15 @@ def generate_row_hash(row_data: Dict, ignored_columns: List[str]) -> str:
     return hashlib.md5('|'.join(sorted_values).encode()).hexdigest()
 ```
 
-#### 3.2.3 Sample Validation
+#### 3.3.3 Sample Validation
 - **Algorithm**: Statistical sampling with configurable size
 - **Sampling Method**: TABLESAMPLE SYSTEM (percentage-based)
 - **Fallback**: Random ORDER BY for databases without TABLESAMPLE
 - **Performance**: O(sample_size) rather than O(table_size)
 
-### 3.3 Configuration Management
+### 3.4 Configuration Management
 
-#### 3.3.1 Configuration Schema
+#### 3.4.1 Configuration Schema
 ```yaml
 # settings.yaml structure
 source_db:
@@ -227,6 +285,11 @@ validation:
   hash_algorithm: str  # md5, sha256
   ignored_columns: List[str]  # Global ignored columns
   table_specific_ignored_columns: Dict[str, List[str]]  # Per-table overrides
+  
+  # Primary key handling
+  allow_tables_without_pk: bool  # Default: true, allow validation of tables without primary keys
+  fallback_to_unique_constraints: bool  # Default: true, use unique constraints if no primary key
+  allow_all_columns_identifier: bool  # Default: false, use all columns as identifier (performance impact)
 
 tables:
   include: List[str]  # Empty means all
@@ -241,7 +304,7 @@ logging:
   backup_count: int  # Number of backup files
 ```
 
-#### 3.3.2 Environment Variable Support
+#### 3.4.2 Environment Variable Support
 ```python
 # Support for environment variable substitution
 database_password: ${DB_PASSWORD}
@@ -470,6 +533,13 @@ class ValidationSummary:
 - **Graceful Degradation**: Continue validation when individual tables fail
 - **Reserved Keywords**: Automatic escaping of SQL reserved keywords (backticks for MySQL, quotes for PostgreSQL)
 - **SQL Injection Prevention**: Parameterized queries and proper escaping
+
+### 6.4 Primary Key Edge Cases
+- **No Primary Key**: Automatic fallback to unique constraints or all-column comparison
+- **Composite Primary Keys**: Full support for multi-column primary keys
+- **Mismatched Primary Keys**: Clear error reporting when source/target schemas differ
+- **Performance Warnings**: Alerts when using all-column comparison for tables without unique identifiers
+- **Configurable Behavior**: Settings to control fallback strategies and performance trade-offs
 
 ---
 
