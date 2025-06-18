@@ -79,9 +79,22 @@ class HashValidator(BaseValidator):
             str: MD5 hash of the filtered row data
         """
         # Create dictionary with column names as keys for better consistency
-        row_dict = {col: str(val) for col, val in zip(filtered_columns, row)}
-        row_json = json.dumps(row_dict, sort_keys=True)
-        return hashlib.md5(row_json.encode()).hexdigest()
+        # Use a more robust conversion that handles None, decimals, dates, etc.
+        row_dict = {}
+        for col, val in zip(filtered_columns, row):
+            if val is None:
+                row_dict[col] = None
+            elif isinstance(val, (int, float, str, bool)):
+                row_dict[col] = val
+            else:
+                # Handle decimals, dates, and other complex types by converting to string
+                row_dict[col] = str(val)
+        
+        # Sort keys and create a consistent string representation
+        sorted_items = sorted(row_dict.items())
+        # Use a more deterministic serialization than JSON (which can vary)
+        hash_string = '|'.join([f"{k}:{repr(v)}" for k, v in sorted_items])
+        return hashlib.md5(hash_string.encode('utf-8')).hexdigest()
 
     def _get_table_hashes_with_sampling(self, table_name: str, engine, identifier_columns: List[str], filtered_columns: List[str], total_rows: int, identifier_type: str) -> Dict[str, str]:
         """
@@ -167,6 +180,7 @@ class HashValidator(BaseValidator):
         
         hashes = {}
         with engine.connect() as conn:
+            logger.info(f"DEBUG: Executing sampling query: {query}")
             rows = conn.execute(query).fetchall()
             
             for row in rows:
@@ -338,7 +352,7 @@ class HashValidator(BaseValidator):
             logger.error(f"Error fetching row data for logging: {str(e)}")
             return {}
 
-    def _log_detailed_mismatch(self, table_name: str, row_identifier: str, identifier_columns: List[str], final_columns: List[str], mismatch_count: int, identifier_type: str):
+    def _log_detailed_mismatch(self, table_name: str, row_identifier: str, identifier_columns: List[str], final_columns: List[str], mismatch_count: int, identifier_type: str, source_hash: str = None, target_hash: str = None):
         """
         Log detailed information about hash mismatches.
         
@@ -349,9 +363,15 @@ class HashValidator(BaseValidator):
             final_columns (List[str]): Columns used for hashing
             mismatch_count (int): Current mismatch count for progress
             identifier_type (str): Type of identifier (primary_key, unique_constraint, all_columns)
+            source_hash (str): Hash from source database
+            target_hash (str): Hash from target database
         """
         logger.info(f"=== HASH MISMATCH #{mismatch_count} IN TABLE '{table_name}' ===")
         logger.info(f"Row identifier ({identifier_type}): {row_identifier}")
+        
+        if source_hash and target_hash:
+            logger.info(f"Source hash: {source_hash}")
+            logger.info(f"Target hash: {target_hash}")
         
         # For detailed row comparison, we need the actual values, not the signature
         # This is complex for 'all_columns' type, so we'll only do it for primary_key and unique_constraint
@@ -369,31 +389,146 @@ class HashValidator(BaseValidator):
         
         if source_row and target_row:
             logger.info("SOURCE ROW DATA:")
+            source_row_for_hash = []
             for col in final_columns:
                 source_val = source_row.get(col, 'NULL')
-                logger.info(f"  {col}: {repr(source_val)}")
+                source_row_for_hash.append(source_val)
+                logger.info(f"  {col}: {repr(source_val)} (type: {type(source_val).__name__})")
             
             logger.info("TARGET ROW DATA:")
+            target_row_for_hash = []
             for col in final_columns:
                 target_val = target_row.get(col, 'NULL')
-                logger.info(f"  {col}: {repr(target_val)}")
+                target_row_for_hash.append(target_val)
+                logger.info(f"  {col}: {repr(target_val)} (type: {type(target_val).__name__})")
             
-            # Show differences
+            # Generate hashes for both rows and compare
+            try:
+                computed_source_hash = self._generate_row_hash(tuple(source_row_for_hash), final_columns)
+                computed_target_hash = self._generate_row_hash(tuple(target_row_for_hash), final_columns)
+                logger.info(f"Computed source hash: {computed_source_hash}")
+                logger.info(f"Computed target hash: {computed_target_hash}")
+                
+                if computed_source_hash != computed_target_hash:
+                    logger.info("✓ Hash computation confirms mismatch")
+                else:
+                    logger.warning("⚠️ Hash computation shows match - possible sampling issue!")
+            except Exception as e:
+                logger.error(f"Error computing verification hashes: {str(e)}")
+            
+            # Show differences with detailed type information
             differences = []
+            type_differences = []
             for col in final_columns:
                 source_val = source_row.get(col)
                 target_val = target_row.get(col)
+                source_type = type(source_val).__name__
+                target_type = type(target_val).__name__
+                
                 if source_val != target_val:
-                    differences.append(f"{col}: '{source_val}' != '{target_val}'")
+                    differences.append(f"{col}: {repr(source_val)} != {repr(target_val)}")
+                    
+                if source_type != target_type:
+                    type_differences.append(f"{col}: {source_type} vs {target_type}")
             
             if differences:
-                logger.info("DIFFERENCES FOUND:")
+                logger.info("VALUE DIFFERENCES FOUND:")
                 for diff in differences:
                     logger.info(f"  - {diff}")
-            else:
-                logger.warning("No obvious differences found (possible data type or encoding issue)")
+            
+            if type_differences:
+                logger.info("TYPE DIFFERENCES FOUND:")
+                for diff in type_differences:
+                    logger.info(f"  - {diff}")
+                    
+            if not differences and not type_differences:
+                logger.warning("No obvious differences found - possible encoding, precision, or sampling issue")
+                logger.info("Try checking for:")
+                logger.info("  - Decimal precision differences (e.g., 150.00 vs 150.0)")
+                logger.info("  - Timestamp microsecond differences")
+                logger.info("  - Character encoding differences")
+                logger.info("  - Whitespace differences")
         else:
             logger.error("Could not retrieve row data for detailed comparison")
+        
+        logger.info("=" * 60)
+
+    def debug_hash_for_row(self, table_name: str, row_identifier: str, identifier_columns: List[str], final_columns: List[str], identifier_type: str):
+        """
+        Debug hash generation for a specific row to identify issues.
+        
+        Args:
+            table_name (str): Name of the table
+            row_identifier (str): Row identifier value
+            identifier_columns (List[str]): Row identifier column names
+            final_columns (List[str]): Columns used for hashing
+            identifier_type (str): Type of identifier
+        """
+        logger.info(f"=== DEBUG HASH GENERATION FOR ROW {row_identifier} ===")
+        
+        if identifier_type in ['primary_key', 'unique_constraint']:
+            pk_values = tuple(row_identifier.split('|'))
+            
+            # Get raw data from both databases
+            source_row = self._get_row_data_for_logging(table_name, self.source_engine, identifier_columns, final_columns, pk_values)
+            target_row = self._get_row_data_for_logging(table_name, self.target_engine, identifier_columns, final_columns, pk_values)
+            
+            if source_row and target_row:
+                # Show raw data
+                logger.info("SOURCE RAW DATA:")
+                source_tuple = []
+                for col in final_columns:
+                    val = source_row.get(col)
+                    source_tuple.append(val)
+                    logger.info(f"  {col}: {repr(val)} (type: {type(val).__name__})")
+                
+                logger.info("TARGET RAW DATA:")
+                target_tuple = []
+                for col in final_columns:
+                    val = target_row.get(col)
+                    target_tuple.append(val)
+                    logger.info(f"  {col}: {repr(val)} (type: {type(val).__name__})")
+                
+                # Generate hashes step by step
+                logger.info("HASH GENERATION DEBUG:")
+                try:
+                    source_hash = self._generate_row_hash(tuple(source_tuple), final_columns)
+                    target_hash = self._generate_row_hash(tuple(target_tuple), final_columns)
+                    
+                    logger.info(f"Source hash: {source_hash}")
+                    logger.info(f"Target hash: {target_hash}")
+                    logger.info(f"Hashes match: {source_hash == target_hash}")
+                    
+                    # Show hash input string
+                    source_dict = {}
+                    target_dict = {}
+                    for col, val in zip(final_columns, source_tuple):
+                        if val is None:
+                            source_dict[col] = None
+                        elif isinstance(val, (int, float, str, bool)):
+                            source_dict[col] = val
+                        else:
+                            source_dict[col] = str(val)
+                    
+                    for col, val in zip(final_columns, target_tuple):
+                        if val is None:
+                            target_dict[col] = None
+                        elif isinstance(val, (int, float, str, bool)):
+                            target_dict[col] = val
+                        else:
+                            target_dict[col] = str(val)
+                    
+                    source_sorted = sorted(source_dict.items())
+                    target_sorted = sorted(target_dict.items())
+                    source_hash_string = '|'.join([f"{k}:{repr(v)}" for k, v in source_sorted])
+                    target_hash_string = '|'.join([f"{k}:{repr(v)}" for k, v in target_sorted])
+                    
+                    logger.info(f"Source hash string: {source_hash_string}")
+                    logger.info(f"Target hash string: {target_hash_string}")
+                    logger.info(f"Hash strings match: {source_hash_string == target_hash_string}")
+                    
+                except Exception as e:
+                    logger.error(f"Error generating debug hashes: {str(e)}")
         
         logger.info("=" * 60)
 
@@ -515,7 +650,7 @@ class HashValidator(BaseValidator):
                         "target_hash": target_hashes[row_id]
                     })
                     # Log detailed mismatch information
-                    self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type)
+                    self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type, source_hash, target_hashes[row_id])
             
             # Check for rows in target but not in source
             for row_id in target_hashes:
@@ -542,13 +677,40 @@ class HashValidator(BaseValidator):
             
             if mismatches:
                 if sampling_used:
+                    # Count different types of mismatches for clearer reporting
+                    hash_mismatches = [m for m in mismatches if m.get("status") == "hash_mismatch"]
+                    missing_in_target = [m for m in mismatches if m.get("status") == "missing_in_target"]
+                    missing_in_source = [m for m in mismatches if m.get("status") == "missing_in_source"]
+                    
+                    mismatch_details = []
+                    if hash_mismatches:
+                        mismatch_details.append(f"{len(hash_mismatches)} hash mismatches")
+                    if missing_in_target:
+                        mismatch_details.append(f"{len(missing_in_target)} missing in target")
+                    if missing_in_source:
+                        mismatch_details.append(f"{len(missing_in_source)} missing in source")
+                    
                     logger.warning(
-                        f"Hash validation found {len(mismatches)} mismatches in {len(source_hashes):,} sampled rows from table {table_name} "
-                        f"(total rows: source={source_row_count:,}, target={target_row_count:,})"
+                        f"Hash validation found issues in table {table_name}: {', '.join(mismatch_details)} "
+                        f"(sampled {len(source_hashes):,} rows from source, {len(target_hashes):,} from target; "
+                        f"total rows: source={source_row_count:,}, target={target_row_count:,})"
                     )
                 else:
+                    # Count different types of mismatches for clearer reporting
+                    hash_mismatches = [m for m in mismatches if m.get("status") == "hash_mismatch"]
+                    missing_in_target = [m for m in mismatches if m.get("status") == "missing_in_target"]
+                    missing_in_source = [m for m in mismatches if m.get("status") == "missing_in_source"]
+                    
+                    mismatch_details = []
+                    if hash_mismatches:
+                        mismatch_details.append(f"{len(hash_mismatches)} hash mismatches")
+                    if missing_in_target:
+                        mismatch_details.append(f"{len(missing_in_target)} missing in target")
+                    if missing_in_source:
+                        mismatch_details.append(f"{len(missing_in_source)} missing in source")
+                    
                     logger.warning(
-                        f"Hash validation found {len(mismatches)} mismatches in table {table_name}"
+                        f"Hash validation found issues in table {table_name}: {', '.join(mismatch_details)}"
                     )
                 # Add instruction for detailed logs
                 if mismatch_count > 0:  # Only show instruction if there were hash mismatches (not just missing rows)
