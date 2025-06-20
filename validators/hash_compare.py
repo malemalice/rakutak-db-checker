@@ -629,38 +629,66 @@ class HashValidator(BaseValidator):
                            (source_row_count > self.max_rows_for_full_scan or 
                             target_row_count > self.max_rows_for_full_scan))
             
-            # Compare hashes
+            # Compare hashes - only for rows that exist in both samples
             mismatches = []
             mismatch_count = 0
             
-            for row_id, source_hash in source_hashes.items():
-                if row_id not in target_hashes:
-                    mismatches.append({
-                        "row_identifier": row_id,
-                        "status": "missing_in_target",
-                        "source_hash": source_hash
-                    })
-                    logger.warning(f"Row missing in target - Identifier: {row_id}")
-                elif target_hashes[row_id] != source_hash:
-                    mismatch_count += 1
-                    mismatches.append({
-                        "row_identifier": row_id,
-                        "status": "hash_mismatch",
-                        "source_hash": source_hash,
-                        "target_hash": target_hashes[row_id]
-                    })
-                    # Log detailed mismatch information
-                    self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type, source_hash, target_hashes[row_id])
+            # Get intersection of sampled rows to avoid false positives from inconsistent sampling
+            common_row_ids = set(source_hashes.keys()) & set(target_hashes.keys())
+            source_only_rows = set(source_hashes.keys()) - set(target_hashes.keys())
+            target_only_rows = set(target_hashes.keys()) - set(source_hashes.keys())
             
-            # Check for rows in target but not in source
-            for row_id in target_hashes:
-                if row_id not in source_hashes:
-                    mismatches.append({
-                        "row_identifier": row_id,
-                        "status": "missing_in_source",
-                        "target_hash": target_hashes[row_id]
-                    })
-                    logger.warning(f"Row missing in source - Identifier: {row_id}")
+            if sampling_used:
+                # For sampling mode, we only compare rows that exist in both samples
+                # This prevents false "missing" warnings due to random sampling differences
+                logger.info(f"Comparing {len(common_row_ids):,} rows present in both samples")
+                if source_only_rows or target_only_rows:
+                    logger.info(f"Sampling note: {len(source_only_rows):,} rows only in source sample, {len(target_only_rows):,} rows only in target sample (this is normal with random sampling)")
+                
+                # Only compare hash mismatches for common rows
+                for row_id in common_row_ids:
+                    source_hash = source_hashes[row_id]
+                    target_hash = target_hashes[row_id]
+                    if source_hash != target_hash:
+                        mismatch_count += 1
+                        mismatches.append({
+                            "row_identifier": row_id,
+                            "status": "hash_mismatch",
+                            "source_hash": source_hash,
+                            "target_hash": target_hash
+                        })
+                        # Log detailed mismatch information
+                        self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type, source_hash, target_hash)
+            else:
+                # For full scan mode, missing rows are actual data issues
+                for row_id, source_hash in source_hashes.items():
+                    if row_id not in target_hashes:
+                        mismatches.append({
+                            "row_identifier": row_id,
+                            "status": "missing_in_target",
+                            "source_hash": source_hash
+                        })
+                        logger.warning(f"Row missing in target - Identifier: {row_id}")
+                    elif target_hashes[row_id] != source_hash:
+                        mismatch_count += 1
+                        mismatches.append({
+                            "row_identifier": row_id,
+                            "status": "hash_mismatch",
+                            "source_hash": source_hash,
+                            "target_hash": target_hashes[row_id]
+                        })
+                        # Log detailed mismatch information
+                        self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type, source_hash, target_hashes[row_id])
+                
+                # Check for rows in target but not in source (only for full scan)
+                for row_id in target_hashes:
+                    if row_id not in source_hashes:
+                        mismatches.append({
+                            "row_identifier": row_id,
+                            "status": "missing_in_source",
+                            "target_hash": target_hashes[row_id]
+                        })
+                        logger.warning(f"Row missing in source - Identifier: {row_id}")
             
             result = {
                 "status": "success" if not mismatches else "mismatch",
@@ -668,6 +696,7 @@ class HashValidator(BaseValidator):
                 "total_rows_target": target_row_count,
                 "sampled_rows_source": len(source_hashes),
                 "sampled_rows_target": len(target_hashes),
+                "compared_rows": len(common_row_ids) if sampling_used else len(source_hashes),
                 "sampling_used": sampling_used,
                 "sample_size": self.sample_size if sampling_used else None,
                 "mismatches": mismatches,
@@ -677,26 +706,17 @@ class HashValidator(BaseValidator):
             
             if mismatches:
                 if sampling_used:
-                    # Count different types of mismatches for clearer reporting
+                    # For sampling mode, we only report hash mismatches (no missing row false positives)
                     hash_mismatches = [m for m in mismatches if m.get("status") == "hash_mismatch"]
-                    missing_in_target = [m for m in mismatches if m.get("status") == "missing_in_target"]
-                    missing_in_source = [m for m in mismatches if m.get("status") == "missing_in_source"]
                     
-                    mismatch_details = []
                     if hash_mismatches:
-                        mismatch_details.append(f"{len(hash_mismatches)} hash mismatches")
-                    if missing_in_target:
-                        mismatch_details.append(f"{len(missing_in_target)} missing in target")
-                    if missing_in_source:
-                        mismatch_details.append(f"{len(missing_in_source)} missing in source")
-                    
-                    logger.warning(
-                        f"Hash validation found issues in table {table_name}: {', '.join(mismatch_details)} "
-                        f"(sampled {len(source_hashes):,} rows from source, {len(target_hashes):,} from target; "
-                        f"total rows: source={source_row_count:,}, target={target_row_count:,})"
-                    )
+                        logger.warning(
+                            f"Hash validation found {len(hash_mismatches)} hash mismatches in table {table_name} "
+                            f"(compared {len(common_row_ids):,} common rows from samples; "
+                            f"total rows: source={source_row_count:,}, target={target_row_count:,})"
+                        )
                 else:
-                    # Count different types of mismatches for clearer reporting
+                    # For full scan mode, report all types of mismatches
                     hash_mismatches = [m for m in mismatches if m.get("status") == "hash_mismatch"]
                     missing_in_target = [m for m in mismatches if m.get("status") == "missing_in_target"]
                     missing_in_source = [m for m in mismatches if m.get("status") == "missing_in_source"]
@@ -717,7 +737,7 @@ class HashValidator(BaseValidator):
                     logger.info(f"📋 For detailed row-by-row comparison of mismatched data, check: logs/data_checker.log")
             else:
                 if sampling_used:
-                    logger.info(f"Hash validation successful for table {table_name} - {len(source_hashes):,} sampled rows matched")
+                    logger.info(f"Hash validation successful for table {table_name} - {len(common_row_ids):,} compared rows matched")
                 else:
                     logger.info(f"Hash validation successful for table {table_name}")
             
