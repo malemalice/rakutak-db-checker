@@ -104,6 +104,9 @@ validation:
   sample_size: 1000
   chunk_size: 10000
   
+  # Maximum number of detailed hash mismatches to log (prevents excessive logging)
+  max_detailed_mismatches: 20
+  
   # Columns to ignore during hash validation (ETL metadata)
   ignored_columns:
     - _dlt_load_id
@@ -185,6 +188,7 @@ Creates MD5 hashes of row data and compares them between databases:
 - Identifies data mismatches with specific row references
 - Handles chunking for large tables
 - **Detailed mismatch logging**: Logs complete source and target row data for mismatched records
+- **Configurable logging limit**: Limits detailed logging to prevent excessive output (default: 20 mismatches)
 
 ### Sample Data Comparison
 Performs simple row count comparison (lightweight version of row count validation).
@@ -197,6 +201,8 @@ When hash validation finds mismatches, detailed row-by-row comparison data is lo
 - **Complete source row data** with all column values
 - **Complete target row data** with all column values
 - **Specific differences** showing which columns differ and their values
+
+**Note**: To prevent excessive log files, detailed logging is limited to the first 20 mismatches per table by default. This can be configured using the `max_detailed_mismatches` setting. All mismatches are still counted and reported in the summary.
 
 ### Example Detailed Log Output
 ```

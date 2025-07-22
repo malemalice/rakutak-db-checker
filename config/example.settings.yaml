@@ -33,6 +33,9 @@ validation:
     sample_size: 10000               # Number of rows to sample for large tables
     sample_method: "random"          # "random" or "systematic"
   
+  # Maximum number of detailed hash mismatches to log (prevents excessive logging)
+  max_detailed_mismatches: 20
+  
   # Columns to ignore during hash validation (commonly added by ETL tools)
   ignored_columns:
     - _dlt_load_id
