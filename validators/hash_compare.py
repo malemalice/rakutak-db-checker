@@ -22,6 +22,9 @@ class HashValidator(BaseValidator):
         self.max_rows_for_full_scan = self.hash_sampling.get('max_rows_for_full_scan', 100000)
         self.sample_size = self.hash_sampling.get('sample_size', 10000)
         self.sample_method = self.hash_sampling.get('sample_method', 'random')
+        
+        # Detailed mismatch logging limit
+        self.max_detailed_mismatches = config['validation'].get('max_detailed_mismatches', 20)
 
     def _get_table_row_count(self, table_name: str, engine) -> int:
         """
@@ -646,6 +649,7 @@ class HashValidator(BaseValidator):
                     logger.info(f"Sampling note: {len(source_only_rows):,} rows only in source sample, {len(target_only_rows):,} rows only in target sample (this is normal with random sampling)")
                 
                 # Only compare hash mismatches for common rows
+                detailed_logged_count = 0
                 for row_id in common_row_ids:
                     source_hash = source_hashes[row_id]
                     target_hash = target_hashes[row_id]
@@ -657,10 +661,17 @@ class HashValidator(BaseValidator):
                             "source_hash": source_hash,
                             "target_hash": target_hash
                         })
-                        # Log detailed mismatch information
-                        self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type, source_hash, target_hash)
+                        # Log detailed mismatch information only if under the limit
+                        if detailed_logged_count < self.max_detailed_mismatches:
+                            detailed_logged_count += 1
+                            self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, detailed_logged_count, source_id_type, source_hash, target_hash)
+                        elif detailed_logged_count == self.max_detailed_mismatches:
+                            # Log summary when limit is reached
+                            logger.info(f"📋 Detailed logging limit reached ({self.max_detailed_mismatches} mismatches). Additional mismatches will be counted but not logged in detail.")
+                            detailed_logged_count += 1  # Increment to avoid logging this message again
             else:
                 # For full scan mode, missing rows are actual data issues
+                detailed_logged_count = 0
                 for row_id, source_hash in source_hashes.items():
                     if row_id not in target_hashes:
                         mismatches.append({
@@ -677,8 +688,14 @@ class HashValidator(BaseValidator):
                             "source_hash": source_hash,
                             "target_hash": target_hashes[row_id]
                         })
-                        # Log detailed mismatch information
-                        self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, mismatch_count, source_id_type, source_hash, target_hashes[row_id])
+                        # Log detailed mismatch information only if under the limit
+                        if detailed_logged_count < self.max_detailed_mismatches:
+                            detailed_logged_count += 1
+                            self._log_detailed_mismatch(table_name, row_id, source_identifier, final_columns, detailed_logged_count, source_id_type, source_hash, target_hashes[row_id])
+                        elif detailed_logged_count == self.max_detailed_mismatches:
+                            # Log summary when limit is reached
+                            logger.info(f"📋 Detailed logging limit reached ({self.max_detailed_mismatches} mismatches). Additional mismatches will be counted but not logged in detail.")
+                            detailed_logged_count += 1  # Increment to avoid logging this message again
                 
                 # Check for rows in target but not in source (only for full scan)
                 for row_id in target_hashes:

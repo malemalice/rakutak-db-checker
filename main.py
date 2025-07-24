@@ -146,6 +146,7 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
     failed_tables = []
     error_tables = []
     has_hash_mismatches = False
+    has_missing_rows = False
     
     for table_name, result in validator_results.items():
         if result.get("status") == "success":
@@ -157,6 +158,12 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
                 hash_mismatches = [m for m in result["mismatches"] if m.get("status") == "hash_mismatch"]
                 if hash_mismatches:
                     has_hash_mismatches = True
+            # Check if this is a row count validator with missing row detection
+            elif validator_name == "RowCountValidator":
+                missing_in_target = result.get("missing_in_target", [])
+                missing_in_source = result.get("missing_in_source", [])
+                if missing_in_target or missing_in_source:
+                    has_missing_rows = True
         elif result.get("status") == "error":
             error_tables.append(table_name)
     
@@ -188,7 +195,19 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
                 source_count = result.get("source_count", 0)
                 target_count = result.get("target_count", 0)
                 diff = result.get("difference", 0)
-                print(f"   • {table} (source: {source_count}, target: {target_count}, diff: {diff})")
+                missing_detection_performed = result.get("missing_detection_performed", False)
+                missing_in_target = result.get("missing_in_target", [])
+                missing_in_source = result.get("missing_in_source", [])
+                
+                if missing_detection_performed and (missing_in_target or missing_in_source):
+                    missing_parts = []
+                    if missing_in_target:
+                        missing_parts.append(f"{len(missing_in_target)} missing in target")
+                    if missing_in_source:
+                        missing_parts.append(f"{len(missing_in_source)} missing in source")
+                    print(f"   • {table} (source: {source_count}, target: {target_count}, diff: {diff}, {', '.join(missing_parts)})")
+                else:
+                    print(f"   • {table} (source: {source_count}, target: {target_count}, diff: {diff})")
             elif validator_name == "HashValidator":
                 if "mismatches" in result:
                     mismatch_count = len(result["mismatches"])
@@ -224,6 +243,12 @@ def _generate_validator_summary(validator_name: str, validator_results: Dict[str
     if validator_name == "HashValidator" and has_hash_mismatches:
         print(f"\n📋 DETAILED LOGS:")
         print(f"   For row-by-row data comparison of mismatched records,")
+        print(f"   check the detailed logs at: logs/data_checker.log")
+    
+    # Add detailed log instruction for row count validator with missing rows
+    if validator_name == "RowCountValidator" and has_missing_rows:
+        print(f"\n📋 DETAILED LOGS:")
+        print(f"   For detailed missing row identifiers,")
         print(f"   check the detailed logs at: logs/data_checker.log")
     
     print(f"{'='*60}")

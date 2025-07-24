@@ -104,6 +104,15 @@ validation:
   sample_size: 1000
   chunk_size: 10000
   
+  # Maximum number of detailed hash mismatches to log (prevents excessive logging)
+  max_detailed_mismatches: 20
+  
+  # Row count validation settings
+  row_count_missing_detection:
+    enabled: true                    # Enable detection of missing rows when count mismatch occurs
+    max_missing_rows_to_log: 50     # Maximum number of missing rows to log in detail
+    max_table_size_for_detection: 1000000  # Skip missing row detection for tables larger than this
+  
   # Columns to ignore during hash validation (ETL metadata)
   ignored_columns:
     - _dlt_load_id
@@ -176,7 +185,12 @@ docker compose down
 ## Validation Methods
 
 ### Row Count Validation
-Compares the number of rows in each table between source and target databases.
+Compares the number of rows in each table between source and target databases:
+- **Basic counting**: Direct COUNT(*) queries for fast comparison
+- **Missing row detection**: When count mismatch occurs, identifies which specific rows are missing
+- **Primary key support**: Uses primary keys or unique constraints to identify missing rows  
+- **Configurable limits**: Limits detailed logging to prevent excessive output (default: 50 missing rows)
+- **Performance aware**: Skips detection for very large tables to maintain performance
 
 ### Hash-Based Validation
 Creates MD5 hashes of row data and compares them between databases:
@@ -185,18 +199,22 @@ Creates MD5 hashes of row data and compares them between databases:
 - Identifies data mismatches with specific row references
 - Handles chunking for large tables
 - **Detailed mismatch logging**: Logs complete source and target row data for mismatched records
+- **Configurable logging limit**: Limits detailed logging to prevent excessive output (default: 20 mismatches)
 
 ### Sample Data Comparison
 Performs simple row count comparison (lightweight version of row count validation).
 
 ## Detailed Logging
 
+### Hash Validation Logging
 When hash validation finds mismatches, detailed row-by-row comparison data is logged to `logs/data_checker.log`. This includes:
 
 - **Primary key values** of mismatched rows
 - **Complete source row data** with all column values
 - **Complete target row data** with all column values
 - **Specific differences** showing which columns differ and their values
+
+**Note**: To prevent excessive log files, detailed logging is limited to the first 20 mismatches per table by default. This can be configured using the `max_detailed_mismatches` setting. All mismatches are still counted and reported in the summary.
 
 ### Example Detailed Log Output
 ```
@@ -221,9 +239,59 @@ This detailed logging helps identify:
 - **Null handling** (NULL vs empty string)
 - **Precision mismatches** (floating point precision)
 
+### Missing Row Detection Logging
+When row count validation detects count mismatches, missing row identifiers are logged to `logs/data_checker.log`. This includes:
+
+- **Missing row identifiers** using primary keys or unique constraints
+- **Identifier type used** (primary_key, unique_constraint, all_columns)
+- **Separate sections** for rows missing in target vs. missing in source
+- **Count summaries** showing total numbers of missing rows
+
+**Note**: To prevent excessive log files, missing row logging is limited to the first 50 missing rows per table by default. This can be configured using the `max_missing_rows_to_log` setting. All missing rows are still counted and reported in the summary.
+
+#### Example Missing Row Log Output
+```
+2025-07-22 16:30:15 | INFO | === ROWS MISSING IN TARGET - TABLE 'orders' ===
+2025-07-22 16:30:15 | INFO | Identifier type: primary_key
+2025-07-22 16:30:15 | INFO | Identifier columns: ['order_id']
+2025-07-22 16:30:15 | INFO | Total missing rows: 5
+2025-07-22 16:30:15 | INFO |   Missing row #1: 12345
+2025-07-22 16:30:15 | INFO |   Missing row #2: 12346
+2025-07-22 16:30:15 | INFO |   Missing row #3: 12347
+2025-07-22 16:30:15 | INFO |   Missing row #4: 12348
+2025-07-22 16:30:15 | INFO |   Missing row #5: 12349
+2025-07-22 16:30:15 | INFO | ============================================================
+```
+
 ## Sample Output
 
 ```
+🚀 Starting RowCountValidator for 3 tables
+[1/3] Validating table: users ... ✅ PASSED
+[2/3] Validating table: orders ... ❌ FAILED (Row count diff: 5)
+[3/3] Validating table: products ... ✅ PASSED
+✅ Completed RowCountValidator validation
+
+============================================================
+VALIDATION SUMMARY - RowCountValidator
+============================================================
+Total tables validated: 3
+✅ Passed: 2 tables
+❌ Failed: 1 tables
+⚠️  Errors: 0 tables
+
+✅ PASSED TABLES:
+   • products
+   • users
+
+❌ FAILED TABLES:
+   • orders (source: 1000, target: 995, diff: 5, 5 missing in target)
+
+📋 DETAILED LOGS:
+   For detailed missing row identifiers,
+   check the detailed logs at: logs/data_checker.log
+============================================================
+
 🚀 Starting HashValidator for 3 tables
 [1/3] Validating table: users ... ✅ PASSED
 [2/3] Validating table: orders ... ❌ FAILED (2 hash mismatches)
