@@ -7,7 +7,7 @@ from loguru import logger
 from validators.base import BaseValidator
 from utils.sql_utils import (
     get_database_type, build_select_query, build_where_clause_for_pk, escape_column_name,
-    get_suitable_row_identifier, create_row_signature
+    get_suitable_row_identifier, create_row_signature, generate_update_query, generate_insert_query
 )
 
 class HashValidator(BaseValidator):
@@ -25,6 +25,10 @@ class HashValidator(BaseValidator):
         
         # Detailed mismatch logging limit
         self.max_detailed_mismatches = config['validation'].get('max_detailed_mismatches', 20)
+        
+        # Fix query generation
+        self.generate_fix_queries = config['validation'].get('generate_fix_queries', True)
+        self.fix_queries_file = config['validation'].get('fix_queries_file', 'logs/fix-query.sql')
 
     def _get_table_row_count(self, table_name: str, engine) -> int:
         """
@@ -456,6 +460,120 @@ class HashValidator(BaseValidator):
         
         logger.info("=" * 60)
 
+    def _generate_fix_query(self, table_name: str, row_identifier: str, identifier_columns: List[str], 
+                           final_columns: List[str], identifier_type: str, source_row: Dict[str, Any], 
+                           target_row: Dict[str, Any]) -> str:
+        """
+        Generate a MySQL UPDATE query to fix differences between source and target data.
+        
+        Args:
+            table_name: Name of the table
+            row_identifier: Row identifier value
+            identifier_columns: List of identifier column names
+            final_columns: List of columns used for comparison
+            identifier_type: Type of identifier
+            source_row: Source row data
+            target_row: Target row data
+            
+        Returns:
+            str: MySQL UPDATE query or None if no differences
+        """
+        if identifier_type not in ['primary_key', 'unique_constraint']:
+            logger.warning(f"Cannot generate fix query for table {table_name} - no unique identifier available")
+            return None
+        
+        try:
+            # Parse the row identifier back to individual values
+            pk_values = tuple(row_identifier.split('|'))
+            
+            # Get database type for proper escaping
+            db_type = get_database_type(self.target_engine)
+            
+            # Generate the UPDATE query
+            update_query = generate_update_query(
+                table_name=table_name,
+                identifier_columns=identifier_columns,
+                identifier_values=pk_values,
+                source_data=source_row,
+                target_data=target_row,
+                db_type=db_type,
+                ignored_columns=self.ignored_columns
+            )
+            
+            return update_query
+            
+        except Exception as e:
+            logger.error(f"Error generating fix query for table {table_name}: {str(e)}")
+            return None
+
+    def _generate_insert_query(self, table_name: str, row_identifier: str, identifier_columns: List[str], 
+                             final_columns: List[str], identifier_type: str, source_row: Dict[str, Any]) -> str:
+        """
+        Generate a MySQL INSERT query to add missing rows from source data.
+        
+        Args:
+            table_name: Name of the table
+            row_identifier: Row identifier value
+            identifier_columns: List of identifier column names
+            final_columns: List of columns used for comparison
+            identifier_type: Type of identifier
+            source_row: Source row data (the valid reference)
+            
+        Returns:
+            str: MySQL INSERT query or None if no unique identifier available
+        """
+        if identifier_type not in ['primary_key', 'unique_constraint']:
+            logger.warning(f"Cannot generate insert query for table {table_name} - no unique identifier available")
+            return None
+        
+        try:
+            # Get database type for proper escaping
+            db_type = get_database_type(self.target_engine)
+            
+            # Generate the INSERT query using source data as the valid reference
+            insert_query = generate_insert_query(
+                table_name=table_name,
+                source_data=source_row,
+                db_type=db_type,
+                ignored_columns=self.ignored_columns
+            )
+            
+            return insert_query
+            
+        except Exception as e:
+            logger.error(f"Error generating insert query for table {table_name}: {str(e)}")
+            return None
+
+    def _save_fix_queries(self, fix_queries: List[str]) -> None:
+        """
+        Save fix queries to a SQL file.
+        
+        Args:
+            fix_queries: List of SQL UPDATE and INSERT queries
+        """
+        if not fix_queries:
+            return
+            
+        try:
+            # Ensure logs directory exists
+            import os
+            os.makedirs(os.path.dirname(self.fix_queries_file), exist_ok=True)
+            
+            with open(self.fix_queries_file, 'w') as f:
+                f.write("-- Auto-generated fix queries for data differences\n")
+                f.write("-- Generated by db-checker\n")
+                f.write("-- Execute these queries on the TARGET database to fix differences\n")
+                f.write("-- Source data is used as the valid reference for all queries\n\n")
+                
+                for i, query in enumerate(fix_queries, 1):
+                    f.write(f"-- Fix query #{i}\n")
+                    f.write(f"{query}\n\n")
+            
+            logger.info(f"Generated {len(fix_queries)} fix queries saved to: {self.fix_queries_file}")
+            
+        except Exception as e:
+            logger.error(f"Error saving fix queries: {str(e)}")
+
     def debug_hash_for_row(self, table_name: str, row_identifier: str, identifier_columns: List[str], final_columns: List[str], identifier_type: str):
         """
         Debug hash generation for a specific row to identify issues.
@@ -635,6 +753,7 @@ class HashValidator(BaseValidator):
             # Compare hashes - only for rows that exist in both samples
             mismatches = []
             mismatch_count = 0
+            fix_queries = []  # Collect fix queries for differences
             
             # Get intersection of sampled rows to avoid false positives from inconsistent sampling
             common_row_ids = set(source_hashes.keys()) & set(target_hashes.keys())
@@ -661,6 +780,22 @@ class HashValidator(BaseValidator):
                             "source_hash": source_hash,
                             "target_hash": target_hash
                         })
+                        
+                        # Generate fix query if enabled and we have unique identifiers
+                        if self.generate_fix_queries and source_id_type in ['primary_key', 'unique_constraint']:
+                            try:
+                                # Get detailed row data for fix query generation
+                                pk_values = tuple(row_id.split('|'))
+                                source_row = self._get_row_data_for_logging(table_name, self.source_engine, source_identifier, final_columns, pk_values)
+                                target_row = self._get_row_data_for_logging(table_name, self.target_engine, source_identifier, final_columns, pk_values)
+                                
+                                if source_row and target_row:
+                                    fix_query = self._generate_fix_query(table_name, row_id, source_identifier, final_columns, source_id_type, source_row, target_row)
+                                    if fix_query:
+                                        fix_queries.append(fix_query)
+                            except Exception as e:
+                                logger.error(f"Error generating fix query for row {row_id}: {str(e)}")
+                        
                         # Log detailed mismatch information only if under the limit
                         if detailed_logged_count < self.max_detailed_mismatches:
                             detailed_logged_count += 1
@@ -680,6 +815,20 @@ class HashValidator(BaseValidator):
                             "source_hash": source_hash
                         })
                         logger.warning(f"Row missing in target - Identifier: {row_id}")
+                        
+                        # Generate INSERT query if enabled and we have unique identifiers
+                        if self.generate_fix_queries and source_id_type in ['primary_key', 'unique_constraint']:
+                            try:
+                                # Get detailed row data from source for INSERT query generation
+                                pk_values = tuple(row_id.split('|'))
+                                source_row = self._get_row_data_for_logging(table_name, self.source_engine, source_identifier, final_columns, pk_values)
+                                
+                                if source_row:
+                                    insert_query = self._generate_insert_query(table_name, row_id, source_identifier, final_columns, source_id_type, source_row)
+                                    if insert_query:
+                                        fix_queries.append(insert_query)
+                            except Exception as e:
+                                logger.error(f"Error generating insert query for row {row_id}: {str(e)}")
                     elif target_hashes[row_id] != source_hash:
                         mismatch_count += 1
                         mismatches.append({
@@ -688,6 +837,22 @@ class HashValidator(BaseValidator):
                             "source_hash": source_hash,
                             "target_hash": target_hashes[row_id]
                         })
+                        
+                        # Generate fix query if enabled and we have unique identifiers
+                        if self.generate_fix_queries and source_id_type in ['primary_key', 'unique_constraint']:
+                            try:
+                                # Get detailed row data for fix query generation
+                                pk_values = tuple(row_id.split('|'))
+                                source_row = self._get_row_data_for_logging(table_name, self.source_engine, source_identifier, final_columns, pk_values)
+                                target_row = self._get_row_data_for_logging(table_name, self.target_engine, source_identifier, final_columns, pk_values)
+                                
+                                if source_row and target_row:
+                                    fix_query = self._generate_fix_query(table_name, row_id, source_identifier, final_columns, source_id_type, source_row, target_row)
+                                    if fix_query:
+                                        fix_queries.append(fix_query)
+                            except Exception as e:
+                                logger.error(f"Error generating fix query for row {row_id}: {str(e)}")
+                        
                         # Log detailed mismatch information only if under the limit
                         if detailed_logged_count < self.max_detailed_mismatches:
                             detailed_logged_count += 1
@@ -707,6 +872,10 @@ class HashValidator(BaseValidator):
                         })
                         logger.warning(f"Row missing in source - Identifier: {row_id}")
             
+            # Save fix queries if any were generated
+            if fix_queries and self.generate_fix_queries:
+                self._save_fix_queries(fix_queries)
+            
             result = {
                 "status": "success" if not mismatches else "mismatch",
                 "total_rows_source": source_row_count,
@@ -717,6 +886,7 @@ class HashValidator(BaseValidator):
                 "sampling_used": sampling_used,
                 "sample_size": self.sample_size if sampling_used else None,
                 "mismatches": mismatches,
+                "fix_queries_generated": len(fix_queries) if self.generate_fix_queries else 0,
                 "columns_used": final_columns,
                 "ignored_columns": [col for col in target_columns if col in self.ignored_columns]
             }
@@ -749,9 +919,11 @@ class HashValidator(BaseValidator):
                     logger.warning(
                         f"Hash validation found issues in table {table_name}: {', '.join(mismatch_details)}"
                     )
-                # Add instruction for detailed logs
+                # Add instruction for detailed logs and fix queries
                 if mismatch_count > 0:  # Only show instruction if there were hash mismatches (not just missing rows)
                     logger.info(f"📋 For detailed row-by-row comparison of mismatched data, check: logs/data_checker.log")
+                if fix_queries and self.generate_fix_queries:
+                    logger.info(f"🔧 Generated {len(fix_queries)} fix queries (UPDATE and INSERT) saved to: {self.fix_queries_file}")
             else:
                 if sampling_used:
                     logger.info(f"Hash validation successful for table {table_name} - {len(common_row_ids):,} compared rows matched")
