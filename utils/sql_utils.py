@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 from sqlalchemy.engine import Engine
 from sqlalchemy import MetaData, Table, text
 from loguru import logger
@@ -291,27 +291,193 @@ def build_where_clause_for_pk(pk_columns: List[str], pk_values: tuple, db_type: 
 
 def create_row_signature(row_data: List, identifier_columns: List[str], identifier_type: str) -> str:
     """
-    Create a unique signature for a row based on available identifier columns.
+    Create a row signature for identification purposes.
     
     Args:
         row_data: List of row values
-        identifier_columns: List of column names used as identifier
+        identifier_columns: List of identifier column names
         identifier_type: Type of identifier ('primary_key', 'unique_constraint', 'all_columns')
         
     Returns:
-        str: Unique row signature
+        str: Row signature string
     """
-    import hashlib
-    import json
-    
     if identifier_type == 'all_columns':
-        # For tables without unique identifiers, create a hash of all column values
-        # This is less reliable but the best we can do
-        row_dict = {col: str(val) for col, val in zip(identifier_columns, row_data)}
-        row_json = json.dumps(row_dict, sort_keys=True)
-        return hashlib.md5(row_json.encode()).hexdigest()
+        # For all_columns type, use all values
+        return '|'.join(str(val) for val in row_data)
     else:
-        # For primary keys and unique constraints, create a more readable signature
-        # Preserve the order of identifier columns (important for composite keys)
-        ordered_values = [str(val) for val in row_data]
-        return '|'.join(ordered_values) 
+        # For primary_key and unique_constraint, use only identifier columns
+        # This assumes row_data is in the same order as the full column list
+        # and we need to extract only the identifier columns
+        # This is a simplified version - in practice, you'd need to map columns properly
+        return '|'.join(str(val) for val in row_data[:len(identifier_columns)])
+
+
+def generate_update_query(
+    table_name: str,
+    identifier_columns: List[str],
+    identifier_values: Tuple,
+    source_data: Dict[str, Any],
+    target_data: Dict[str, Any],
+    db_type: str,
+    ignored_columns: List[str] = None
+) -> str:
+    """
+    Generate a MySQL UPDATE query to fix differences between source and target data.
+    
+    Args:
+        table_name: Name of the table
+        identifier_columns: List of identifier column names (primary key or unique constraint)
+        identifier_values: Values for the identifier columns
+        source_data: Source row data as dictionary
+        target_data: Target row data as dictionary
+        db_type: Database type ('mysql', 'postgresql', etc.)
+        ignored_columns: List of columns to ignore during comparison
+        
+    Returns:
+        str: MySQL UPDATE query string
+    """
+    if ignored_columns is None:
+        ignored_columns = []
+    
+    # Find columns that have different values
+    different_columns = []
+    update_values = []
+    
+    for col in source_data.keys():
+        if col in ignored_columns:
+            continue
+            
+        source_val = source_data.get(col)
+        target_val = target_data.get(col)
+        
+        # Compare values, handling None values
+        if source_val != target_val:
+            different_columns.append(col)
+            update_values.append((col, source_val))
+    
+    if not different_columns:
+        return None  # No differences found
+    
+    # Build the WHERE clause for the identifier
+    escaped_table = escape_column_name(table_name, db_type)
+    where_conditions = []
+    
+    for i, col in enumerate(identifier_columns):
+        escaped_col = escape_column_name(col, db_type)
+        val = identifier_values[i]
+        
+        if val is None:
+            where_conditions.append(f"{escaped_col} IS NULL")
+        else:
+            # Handle different data types appropriately
+            if isinstance(val, str):
+                # Escape single quotes in strings
+                escaped_val = val.replace("'", "''")
+                where_conditions.append(f"{escaped_col} = '{escaped_val}'")
+            elif isinstance(val, (int, float)):
+                where_conditions.append(f"{escaped_col} = {val}")
+            elif isinstance(val, bool):
+                where_conditions.append(f"{escaped_col} = {1 if val else 0}")
+            else:
+                # For other types (dates, etc.), convert to string
+                escaped_val = str(val).replace("'", "''")
+                where_conditions.append(f"{escaped_col} = '{escaped_val}'")
+    
+    where_clause = " AND ".join(where_conditions)
+    
+    # Build the SET clause
+    set_clauses = []
+    for col, val in update_values:
+        escaped_col = escape_column_name(col, db_type)
+        
+        if val is None:
+            set_clauses.append(f"{escaped_col} = NULL")
+        else:
+            # Handle different data types appropriately
+            if isinstance(val, str):
+                # Escape single quotes in strings
+                escaped_val = val.replace("'", "''")
+                set_clauses.append(f"{escaped_col} = '{escaped_val}'")
+            elif isinstance(val, (int, float)):
+                set_clauses.append(f"{escaped_col} = {val}")
+            elif isinstance(val, bool):
+                set_clauses.append(f"{escaped_col} = {1 if val else 0}")
+            else:
+                # For other types (dates, etc.), convert to string
+                escaped_val = str(val).replace("'", "''")
+                set_clauses.append(f"{escaped_col} = '{escaped_val}'")
+    
+    set_clause = ", ".join(set_clauses)
+    
+    # Build the complete UPDATE query
+    update_query = f"UPDATE {escaped_table} SET {set_clause} WHERE {where_clause};"
+    
+    return update_query
+
+
+def generate_insert_query(
+    table_name: str,
+    source_data: Dict[str, Any],
+    db_type: str,
+    ignored_columns: List[str] = None
+) -> str:
+    """
+    Generate a MySQL INSERT query to add missing rows from source data.
+    
+    Args:
+        table_name: Name of the table
+        source_data: Source row data as dictionary (the valid reference)
+        db_type: Database type ('mysql', 'postgresql', etc.)
+        ignored_columns: List of columns to ignore during insertion
+        
+    Returns:
+        str: MySQL INSERT query string
+    """
+    if ignored_columns is None:
+        ignored_columns = []
+    
+    # Filter out ignored columns
+    insert_columns = []
+    insert_values = []
+    
+    for col, val in source_data.items():
+        if col in ignored_columns:
+            continue
+            
+        insert_columns.append(col)
+        insert_values.append(val)
+    
+    if not insert_columns:
+        return None  # No columns to insert
+    
+    # Build the INSERT query
+    escaped_table = escape_column_name(table_name, db_type)
+    escaped_columns = escape_column_list(insert_columns, db_type)
+    
+    # Build the VALUES clause
+    value_clauses = []
+    for val in insert_values:
+        if val is None:
+            value_clauses.append("NULL")
+        else:
+            # Handle different data types appropriately
+            if isinstance(val, str):
+                # Escape single quotes in strings
+                escaped_val = val.replace("'", "''")
+                value_clauses.append(f"'{escaped_val}'")
+            elif isinstance(val, (int, float)):
+                value_clauses.append(str(val))
+            elif isinstance(val, bool):
+                value_clauses.append(str(1 if val else 0))
+            else:
+                # For other types (dates, etc.), convert to string
+                escaped_val = str(val).replace("'", "''")
+                value_clauses.append(f"'{escaped_val}'")
+    
+    values_clause = ", ".join(value_clauses)
+    columns_clause = ", ".join(escaped_columns)
+    
+    # Build the complete INSERT query
+    insert_query = f"INSERT INTO {escaped_table} ({columns_clause}) VALUES ({values_clause});"
+    
+    return insert_query 

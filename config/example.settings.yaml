@@ -36,6 +36,10 @@ validation:
   # Maximum number of detailed hash mismatches to log (prevents excessive logging)
   max_detailed_mismatches: 20
   
+  # Fix query generation settings
+  generate_fix_queries: true         # Enable generation of MySQL UPDATE queries for differences
+  fix_queries_file: logs/fix-query.sql  # File to save generated fix queries
+  
   # Row count validation settings
   row_count_missing_detection:
     enabled: true                    # Enable detection of missing rows when count mismatch occurs
