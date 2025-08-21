@@ -16,7 +16,7 @@ MYSQL_RESERVED_KEYWORDS = {
     'some', 'as', 'on', 'using', 'join', 'inner', 'outer', 'left', 'right', 'full',
     'cross', 'natural', 'where', 'having', 'order', 'group', 'by', 'into', 'values',
     'set', 'from', 'with', 'recursive', 'window', 'partition', 'over', 'rows', 'range',
-    'unbounded', 'preceding', 'following', 'current', 'row', 'show'
+    'unbounded', 'preceding', 'following', 'current', 'row', 'show', 'double', 'float', 'int'
 }
 
 # PostgreSQL reserved keywords that need escaping  
@@ -31,7 +31,8 @@ POSTGRESQL_RESERVED_KEYWORDS = {
     'distinct', 'all', 'any', 'some', 'as', 'on', 'using', 'join', 'inner', 'outer',
     'left', 'right', 'full', 'cross', 'natural', 'where', 'having', 'order', 'group',
     'by', 'into', 'values', 'set', 'from', 'with', 'recursive', 'window', 'partition',
-    'over', 'rows', 'range', 'unbounded', 'preceding', 'following', 'current', 'row'
+    'over', 'rows', 'range', 'unbounded', 'preceding', 'following', 'current', 'row',
+    'double', 'float', 'int'
 }
 
 

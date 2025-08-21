@@ -39,6 +39,7 @@ validation:
   # Fix query generation settings
   generate_fix_queries: true         # Enable generation of MySQL UPDATE queries for differences
   fix_queries_file: logs/fix-query.sql  # File to save generated fix queries
+  max_fix_queries: null              # Maximum number of fix queries to generate (null = unlimited, set to number to limit)
   
   # Row count validation settings
   row_count_missing_detection:

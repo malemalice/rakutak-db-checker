@@ -265,6 +265,7 @@ validation:
   # Fix query generation settings
   generate_fix_queries: true         # Enable generation of MySQL UPDATE queries for differences
   fix_queries_file: logs/fix-query.sql  # File to save generated fix queries
+  max_fix_queries: null              # Maximum number of fix queries to generate (null = unlimited, set to number to limit)
 ```
 
 ### How It Works
@@ -322,10 +323,29 @@ UPDATE products SET stock_quantity = 5, price = 1299.99 WHERE product_id = 456;
 - **Column-Level Updates**: Only updates columns that actually differ between source and target
 - **Source as Reference**: Uses source data as the valid reference for all queries
 - **No DELETE**: Currently only generates UPDATE and INSERT queries, not DELETE statements
+- **Query Limit**: Can be configured to limit the maximum number of fix queries generated (prevents excessive output)
 - **Separate sections** for rows missing in target vs. missing in source
 - **Count summaries** showing total numbers of missing rows
 
 **Note**: To prevent excessive log files, missing row logging is limited to the first 50 missing rows per table by default. This can be configured using the `max_missing_rows_to_log` setting. All missing rows are still counted and reported in the summary.
+
+### Fix Query Limit Configuration
+
+The `max_fix_queries` setting allows you to control the maximum number of fix queries generated during validation:
+
+- **`null` (default)**: No limit - generates fix queries for all detected issues
+- **`N` (number)**: Limits the number of fix queries to the specified value
+
+This is particularly useful when dealing with large tables that might have many data differences, preventing the generation of thousands of fix queries that could overwhelm your system.
+
+**Example configuration:**
+```yaml
+validation:
+  generate_fix_queries: true
+  max_fix_queries: 100  # Generate max 100 fix queries
+```
+
+When the limit is reached, the tool will log a message indicating that the limit has been reached and stop generating additional fix queries. All detected issues are still counted and reported in the validation results.
 
 #### Example Missing Row Log Output
 ```

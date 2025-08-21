@@ -29,6 +29,7 @@ class HashValidator(BaseValidator):
         # Fix query generation
         self.generate_fix_queries = config['validation'].get('generate_fix_queries', True)
         self.fix_queries_file = config['validation'].get('fix_queries_file', 'logs/fix-query.sql')
+        self.max_fix_queries = config['validation'].get('max_fix_queries', None)  # None = unlimited
 
     def _get_table_row_count(self, table_name: str, engine) -> int:
         """
@@ -783,6 +784,12 @@ class HashValidator(BaseValidator):
                         
                         # Generate fix query if enabled and we have unique identifiers
                         if self.generate_fix_queries and source_id_type in ['primary_key', 'unique_constraint']:
+                            # Check if we've reached the maximum number of fix queries
+                            if self.max_fix_queries is not None and len(fix_queries) >= self.max_fix_queries:
+                                if len(fix_queries) == self.max_fix_queries:
+                                    logger.info(f"🔧 Fix query limit reached ({self.max_fix_queries}). Additional fix queries will not be generated.")
+                                continue
+                            
                             try:
                                 # Get detailed row data for fix query generation
                                 pk_values = tuple(row_id.split('|'))
@@ -818,6 +825,12 @@ class HashValidator(BaseValidator):
                         
                         # Generate INSERT query if enabled and we have unique identifiers
                         if self.generate_fix_queries and source_id_type in ['primary_key', 'unique_constraint']:
+                            # Check if we've reached the maximum number of fix queries
+                            if self.max_fix_queries is not None and len(fix_queries) >= self.max_fix_queries:
+                                if len(fix_queries) == self.max_fix_queries:
+                                    logger.info(f"🔧 Fix query limit reached ({self.max_fix_queries}). Additional fix queries will not be generated.")
+                                continue
+                            
                             try:
                                 # Get detailed row data from source for INSERT query generation
                                 pk_values = tuple(row_id.split('|'))
@@ -840,6 +853,12 @@ class HashValidator(BaseValidator):
                         
                         # Generate fix query if enabled and we have unique identifiers
                         if self.generate_fix_queries and source_id_type in ['primary_key', 'unique_constraint']:
+                            # Check if we've reached the maximum number of fix queries
+                            if self.max_fix_queries is not None and len(fix_queries) >= self.max_fix_queries:
+                                if len(fix_queries) == self.max_fix_queries:
+                                    logger.info(f"🔧 Fix query limit reached ({self.max_fix_queries}). Additional fix queries will not be generated.")
+                                continue
+                            
                             try:
                                 # Get detailed row data for fix query generation
                                 pk_values = tuple(row_id.split('|'))

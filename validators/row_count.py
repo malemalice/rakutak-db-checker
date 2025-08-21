@@ -4,7 +4,7 @@ from loguru import logger
 from validators.base import BaseValidator
 from utils.sql_utils import (
     get_database_type, escape_column_name, build_select_query, 
-    get_suitable_row_identifier, create_row_signature
+    get_suitable_row_identifier, create_row_signature, generate_insert_query
 )
 
 class RowCountValidator(BaseValidator):
@@ -16,6 +16,12 @@ class RowCountValidator(BaseValidator):
         self.missing_detection_enabled = self.missing_detection_config.get('enabled', True)
         self.max_missing_rows_to_log = self.missing_detection_config.get('max_missing_rows_to_log', 50)
         self.max_table_size_for_detection = self.missing_detection_config.get('max_table_size_for_detection', 1000000)
+        
+        # Fix query generation configuration
+        self.generate_fix_queries = config['validation'].get('generate_fix_queries', False)
+        self.fix_queries_file = config['validation'].get('fix_queries_file', 'logs/fix-query.sql')
+        self.max_fix_queries = config['validation'].get('max_fix_queries', None)  # None = unlimited
+        self.ignored_columns = config['validation'].get('ignored_columns', [])
     
     def _get_row_identifiers(self, table_name: str, engine, limit: int = None) -> Tuple[List[str], List[str], str]:
         """
@@ -116,6 +122,125 @@ class RowCountValidator(BaseValidator):
                     break
             logger.info("=" * 60)
 
+    def _get_row_data_for_insert(self, table_name: str, engine, identifier_columns: List[str], 
+                                identifier_values: Tuple, all_columns: List[str]) -> Dict[str, Any]:
+        """
+        Get complete row data for generating INSERT queries.
+        
+        Args:
+            table_name (str): Name of the table
+            engine: SQLAlchemy engine
+            identifier_columns (List[str]): Column names used for identification
+            identifier_values (Tuple): Values for the identifier columns
+            all_columns (List[str]): All columns to fetch
+            
+        Returns:
+            Dict[str, Any]: Row data as dictionary
+        """
+        try:
+            db_type = get_database_type(engine)
+            
+            # Build WHERE clause for identifier columns
+            where_conditions = []
+            for i, col in enumerate(identifier_columns):
+                escaped_col = escape_column_name(col, db_type)
+                val = identifier_values[i]
+                if val is None:
+                    where_conditions.append(f"{escaped_col} IS NULL")
+                else:
+                    where_conditions.append(f"{escaped_col} = '{val}'")
+            
+            where_clause = " AND ".join(where_conditions)
+            
+            # Use build_select_query for proper column escaping
+            query_str = build_select_query(
+                columns=all_columns,
+                table_name=table_name,
+                db_type=db_type,
+                where_clause=where_clause,
+                limit=1
+            )
+            
+            with engine.connect() as conn:
+                result = conn.execute(text(query_str))
+                row = result.fetchone()
+                
+                if row:
+                    return dict(zip(all_columns, row))
+                else:
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error getting row data for table {table_name}: {str(e)}")
+            return None
+    
+    def _generate_insert_query(self, table_name: str, row_identifier: str, identifier_columns: List[str], 
+                             identifier_type: str, source_row: Dict[str, Any]) -> str:
+        """
+        Generate a MySQL INSERT query to add missing rows from source data.
+        
+        Args:
+            table_name (str): Name of the table
+            row_identifier (str): Row identifier value
+            identifier_columns (List[str]): List of identifier column names
+            identifier_type (str): Type of identifier
+            source_row (Dict[str, Any]): Source row data (the valid reference)
+            
+        Returns:
+            str: MySQL INSERT query or None if no unique identifier available
+        """
+        if identifier_type not in ['primary_key', 'unique_constraint']:
+            logger.warning(f"Cannot generate insert query for table {table_name} - no unique identifier available")
+            return None
+        
+        try:
+            # Get database type for proper escaping
+            db_type = get_database_type(self.target_engine)
+            
+            # Generate the INSERT query using source data as the valid reference
+            insert_query = generate_insert_query(
+                table_name=table_name,
+                source_data=source_row,
+                db_type=db_type,
+                ignored_columns=self.ignored_columns
+            )
+            
+            return insert_query
+            
+        except Exception as e:
+            logger.error(f"Error generating insert query for table {table_name}: {str(e)}")
+            return None
+    
+    def _save_fix_queries(self, fix_queries: List[str]) -> None:
+        """
+        Save fix queries to a SQL file.
+        
+        Args:
+            fix_queries: List of SQL INSERT queries
+        """
+        if not fix_queries:
+            return
+            
+        try:
+            # Ensure logs directory exists
+            import os
+            os.makedirs(os.path.dirname(self.fix_queries_file), exist_ok=True)
+            
+            with open(self.fix_queries_file, 'w') as f:
+                f.write("-- Auto-generated INSERT queries for missing rows\n")
+                f.write("-- Generated by db-checker\n")
+                f.write("-- Execute these queries on the TARGET database to add missing rows\n")
+                f.write("-- Source data is used as the valid reference for all queries\n\n")
+                
+                for i, query in enumerate(fix_queries, 1):
+                    f.write(f"-- Insert query #{i}\n")
+                    f.write(f"{query}\n\n")
+            
+            logger.info(f"Generated {len(fix_queries)} INSERT queries saved to: {self.fix_queries_file}")
+            
+        except Exception as e:
+            logger.error(f"Error saving fix queries: {str(e)}")
+
     def validate_table(self, table_name: str) -> Dict[str, Any]:
         """
         Validate row counts between source and target tables.
@@ -191,6 +316,54 @@ class RowCountValidator(BaseValidator):
                             "identifier_columns": source_id_cols,
                             "identifier_type": source_id_type
                         })
+                        
+                        # Generate INSERT queries for missing rows in target if enabled
+                        # Only generate INSERT queries when target has FEWER rows than source (diff > 0)
+                        fix_queries = []
+                        if (self.generate_fix_queries and missing_in_target and 
+                            source_id_type in ['primary_key', 'unique_constraint'] and diff > 0):
+                            logger.info(f"🔧 Generating INSERT queries for {len(missing_in_target)} missing rows in target...")
+                            
+                            # Get table metadata to get all columns
+                            metadata = MetaData()
+                            source_table = Table(table_name, metadata, autoload_with=self.source_engine)
+                            all_columns = [c.name for c in source_table.columns]
+                            
+                            for row_id in missing_in_target:
+                                # Check if we've reached the maximum number of fix queries
+                                if self.max_fix_queries is not None and len(fix_queries) >= self.max_fix_queries:
+                                    if len(fix_queries) == self.max_fix_queries:
+                                        logger.info(f"🔧 Fix query limit reached ({self.max_fix_queries}). Additional fix queries will not be generated.")
+                                    break
+                                
+                                try:
+                                    # Parse the row identifier back to individual values
+                                    if '|' in row_id:
+                                        pk_values = tuple(row_id.split('|'))
+                                    else:
+                                        pk_values = (row_id,)
+                                    
+                                    # Get complete row data from source
+                                    source_row = self._get_row_data_for_insert(
+                                        table_name, self.source_engine, source_id_cols, pk_values, all_columns
+                                    )
+                                    
+                                    if source_row:
+                                        insert_query = self._generate_insert_query(
+                                            table_name, row_id, source_id_cols, source_id_type, source_row
+                                        )
+                                        if insert_query:
+                                            fix_queries.append(insert_query)
+                                except Exception as e:
+                                    logger.error(f"Error generating insert query for row {row_id}: {str(e)}")
+                            
+                            # Save fix queries if any were generated
+                            if fix_queries:
+                                self._save_fix_queries(fix_queries)
+                        elif self.generate_fix_queries and missing_in_target and diff <= 0:
+                            logger.info(f"⚠️ Target has {abs(diff)} more rows than source - skipping INSERT query generation")
+                            logger.info(f"📋 Missing row analysis shows {len(missing_in_target)} rows in source but not in target")
+                            logger.info(f"📋 This suggests data inconsistency rather than missing rows to insert")
                         
                         # Log missing rows
                         self._log_missing_rows(table_name, missing_in_target, missing_in_source, 
