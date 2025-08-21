@@ -2,6 +2,34 @@
 config/settings.yaml
 reports/*
 venv
-scheduler/__pycache__/*
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Specific __pycache__ directories
+scheduler/__pycache__/
+utils/__pycache__/
+connectors/__pycache__/
+validators/__pycache__/
+
+# Logs
 logs/*
-utils/__pycache__/*
+*.log
+
+# Documentation files to discard
+FIX_SUMMARY.md
+MAX_FIX_QUERIES_IMPLEMENTATION.md
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
