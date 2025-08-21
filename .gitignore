@@ -19,10 +19,6 @@ validators/__pycache__/
 logs/*
 *.log
 
-# Documentation files to discard
-FIX_SUMMARY.md
-MAX_FIX_QUERIES_IMPLEMENTATION.md
-
 # IDE and editor files
 .vscode/
 .idea/
